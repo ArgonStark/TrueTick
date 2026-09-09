@@ -13,6 +13,9 @@ Together they cover both halves of TrueTick:
   load-bearing source, not static or local data (section 3), including a
   subgraph we forked, fixed and published ourselves to cover pools no existing
   subgraph indexed (section 4).
+- **The two joined** — the real product endpoint behind x402, where a paying
+  agent buys genuine normalized deviation data and the payment settles on
+  Hedera through Blocky402 (section 5).
 
 Kept up to date as further evidence is gathered.
 
@@ -262,6 +265,132 @@ captured at pool creation can drift if a pool's fee later changes. This affects
 
 ---
 
+---
+
+## 5. The real service behind x402 — paying for genuine deviation data
+
+Sections 2 and 5 are **different claims**. Section 2 proved the payment rail
+using a throwaway endpoint that returned `{"ticker":"AAPL","price":42}` — a
+dummy payload, deliberately, so the payment loop was the only thing under test.
+This section proves the **product**: the same Blocky402 settlement path gating
+the real `/price/:ticker` endpoint, where what the agent receives is live
+normalized `TokenizedStockPoint` data derived from The Graph and a real
+reference price.
+
+| | |
+|---|---|
+| Server | [`paid-service.mjs`](paid-service.mjs) — `GET /price/:ticker`, 402-gated |
+| Client | [`paid-client.mjs`](paid-client.mjs) — pays, then renders the data |
+| Facilitator | `https://api.testnet.blocky402.com` (Blocky402, enforced) |
+| Network | `hedera:testnet`, scheme `exact` |
+| Settlement asset | HBAR (asset id `0.0.0`) |
+| Price per request | 1,000,000 tinybar = 0.01 HBAR |
+| Payer | `0.0.10435533` |
+| Payee | `0.0.10439151` |
+| Facilitator fee payer | `0.0.7162784` |
+| Data source | Uniswap v4 Ethereum via The Graph — `DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G` |
+
+### Real-service payment
+
+- Transaction: `0.0.7162784@1788989097.995954071`
+- HashScan: https://hashscan.io/testnet/transaction/0.0.7162784-1788989097-995954071
+
+Independently verified against the mirror node (not merely read from the
+`PAYMENT-RESPONSE` header):
+
+```
+result         : SUCCESS
+consensus_ts   : 1788989106.561453106
+charged_fee    : 259648 tinybar
+
+0.0.10435533       -1000000 tinybar   payer (agent)
+0.0.10439151        1000000 tinybar   payee (service)
+0.0.7162784          -259648 tinybar   feePayer (Blocky402)
+```
+
+The agent was debited exactly the advertised price, the service was credited
+exactly that amount, and **Blocky402 paid the network fee** — the facilitator-
+as-fee-payer model, visible in the ledger.
+
+### What the payment actually bought
+
+Live output from the run, at indexed block `25942484` (18s behind chain head):
+
+```
+reference : $223.67  via yahoo-chart
+            asOf 2026-09-09T20:00:00.000Z  (5105s old)
+            session post, marketOpen=false
+
+NVDAon  (Ondo Global Markets)
+  on-chain price : $223.08
+  deviation      : -0.264%   ($-0.59)
+  pool TVL       : $239,778.14   24h vol $102,956.01
+  priceReliable  : true   deviationReliable: false
+  caveats        : market-closed
+
+NVDAx  (Backed Finance (xStocks))
+  on-chain price : $1,136.93
+  deviation      : +408.307%   ($913.26)
+  pool TVL       : $27,186.46   24h vol $9.89
+  priceReliable  : false   deviationReliable: false
+  caveats        : thin-volume, price-divergence, market-closed
+```
+
+Both issuers are read at the **same indexed block**, so the cross-issuer
+comparison is not assembled from two different moments.
+
+The `NVDAx` row is not an error — it is the point of the quality layer. Backed's
+NVIDIA xStock is a genuine token whose Ethereum pools trade about $10 a day, so
+its on-chain price has drifted to $1,136 against a real NVDA price of $223. A
+naive aggregator would publish that as a 408% arbitrage. TrueTick publishes the
+number *and* marks it `priceReliable: false` with `thin-volume` and
+`price-divergence`.
+
+### A failed request costs nothing
+
+x402 settlement runs *after* the handler, and the middleware cancels it when the
+handler responds 4xx/5xx. So the caller is charged for data delivered, not for
+the attempt. Verified against real balances:
+
+```
+agent balance BEFORE : 99930351336 tinybar
+node paid-client.mjs ZZZZ      -> 402 -> paid -> handler 404 -> settlement cancelled
+agent balance AFTER  : 99930351336 tinybar
+difference           : 0 tinybar
+```
+
+### Free surface for development
+
+Paying 0.01 HBAR per iteration while building is wasteful, so the real shape
+stays reachable unpaid at `GET /preview/:ticker`. It **redacts** rather than
+fabricates — every price becomes `null` and a `preview-redacted` caveat is
+added, so a preview can never be mistaken for paid data or quietly built on:
+
+```
+NVDAon   priceUsd=None dev=None tvl=$239,778 vol24h=$102,956
+         caveats=['market-closed', 'preview-redacted']
+```
+
+`GET /tickers` and `GET /health` are also free; `/health` publishes the payment
+terms (asset, price, payee, facilitator) so an agent can decide before spending.
+
+### Track requirement preserved
+
+The `assertBlocky402` hostname guard runs at startup on the server and before
+spending on the client, and [`paid-client.mjs`](paid-client.mjs) additionally
+cross-checks the `feePayer` advertised in the 402 challenge against the signers
+Blocky402 publishes at `/supported` — aborting *before* any HBAR moves if the
+server is settling elsewhere. Observed live in this run:
+
+```
+feePayer : 0.0.7162784
+OK feePayer 0.0.7162784 confirmed as Blocky402
+```
+
+The shared implementation is [`core/blocky402.mjs`](core/blocky402.mjs). The
+original standalone artefacts from section 2 keep their own inline copy and were
+left untouched, so the proven evidence above still reproduces exactly.
+
 ## Reproducing
 
 ```bash
@@ -271,8 +400,16 @@ node x402-server.mjs      # 2. terminal 1
 node x402-client.mjs      #    terminal 2
 
 node graph-price.mjs      # 3. live Graph data
+
+node core/registry-verify.mjs   # re-verify the token registry (contract + subgraph)
+
+node paid-service.mjs           # 5. terminal 1 -- real data behind x402
+node paid-client.mjs NVDA       #    terminal 2 -- pays, prints the deviation data
+
+node service.mjs                #    open/free variant, no payment (port 8402)
 ```
 
 Sections 1–2 require a funded Hedera testnet ECDSA account; section 3 requires a
-free Graph API key from https://thegraph.com/studio. Secrets live in a
-gitignored local env file and are never committed.
+free Graph API key from https://thegraph.com/studio. Section 5 requires **both**
+— it pays on Hedera and reads from The Graph in the same request. Secrets live
+in a gitignored local env file and are never committed.

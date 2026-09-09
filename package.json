@@ -10,7 +10,9 @@
     "x402:client": "node x402-client.mjs",
     "service": "node service.mjs",
     "registry:verify": "node core/registry-verify.mjs",
-    "graph:price": "node graph-price.mjs"
+    "graph:price": "node graph-price.mjs",
+    "paid:service": "node paid-service.mjs",
+    "paid:client": "node paid-client.mjs"
   },
   "engines": {
     "node": ">=20.6"
