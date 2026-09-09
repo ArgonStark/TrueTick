@@ -1,0 +1,8 @@
+# secrets -- never commit
+.env
+.env.*
+!.env.example
+
+node_modules/
+npm-debug.log*
+.DS_Store

@@ -1,0 +1,17 @@
+{
+  "name": "hedera-testnet-evm-check",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Throwaway PoC: can ethers.js sign and send a value transfer via Hedera testnet's EVM JSON-RPC relay?",
+  "type": "module",
+  "scripts": {
+    "send": "node send-hbar.mjs"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "ethers": "^6.17.0"
+  }
+}
