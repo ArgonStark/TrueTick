@@ -1,13 +1,16 @@
 {
-  "name": "hedera-testnet-evm-check",
+  "name": "truetick",
   "version": "1.0.0",
   "private": true,
-  "description": "Throwaway PoC: can ethers.js sign and send a value transfer via Hedera testnet's EVM JSON-RPC relay?",
+  "description": "TrueTick: fair-price and deviation data for tokenized stocks across issuers and EVM chains.",
   "type": "module",
   "scripts": {
     "send": "node send-hbar.mjs",
     "x402:server": "node x402-server.mjs",
-    "x402:client": "node x402-client.mjs"
+    "x402:client": "node x402-client.mjs",
+    "service": "node service.mjs",
+    "registry:verify": "node core/registry-verify.mjs",
+    "graph:price": "node graph-price.mjs"
   },
   "engines": {
     "node": ">=20.6"

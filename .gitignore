@@ -14,3 +14,6 @@ npm-debug.log*
 subgraph/node_modules/
 subgraph/build/
 subgraph/generated/
+
+# last-known-good reference quotes (regenerated at runtime)
+.cache/
