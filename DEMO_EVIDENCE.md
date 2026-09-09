@@ -1,11 +1,16 @@
-# Demo Evidence — Real Hedera Testnet Transactions
+# Demo Evidence — Real On-Chain Transactions and Live Data
 
-Every transaction below is a **real, on-chain Hedera testnet transaction**, not a
-mock, fixture, or replay. Each one is independently verifiable on HashScan by
-following the links — no trust in this repo required.
+Nothing below is a mock, fixture, or replay. Sections 1–2 are **real, on-chain
+Hedera testnet transactions**, independently verifiable on HashScan by following
+the links. Section 3 is a **live query against The Graph's decentralized
+network**, reproducible with an API key — no trust in this repo required.
 
-These prove the payment loop end to end: a wallet that signs, and an x402-gated
-service whose payments settle through the **Blocky402** facilitator.
+Together they cover both halves of TrueTick:
+
+- **Payments** — a wallet that signs, and an x402-gated service whose payments
+  settle through the **Blocky402** facilitator (sections 1–2).
+- **Data** — live tokenized-stock price and liquidity from **The Graph** as a
+  load-bearing source, not static or local data (section 3).
 
 Kept up to date as further evidence is gathered.
 
@@ -121,14 +126,71 @@ every test while failing the requirement. Two guards prevent this:
 
 ---
 
+## 3. Graph live-data proof — tokenized-stock price and liquidity
+
+Proves live tokenized-stock market data flows from **The Graph's decentralized
+network**, satisfying the requirement that The Graph be a load-bearing, live
+data source rather than mocked, local, or static data.
+
+| | |
+|---|---|
+| Script | [`graph-price.mjs`](graph-price.mjs) |
+| Subgraph | Uniswap v4 Ethereum — `DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G` |
+| Explorer | https://thegraph.com/explorer/subgraphs/DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G |
+| Token | NVDAon — NVIDIA (Ondo Tokenized), `0x2D1F7226Bd1F780AF6B9A49DCC0aE00E8Df4bDEE` |
+| Chain | Ethereum mainnet |
+| Endpoint | `https://gateway.thegraph.com/api/subgraphs/id/<SUBGRAPH_ID>` (Bearer auth) |
+
+### Verified snapshot
+
+| | |
+|---|---|
+| Indexed block | **25941078** |
+| Lag behind chain head | **~18s** |
+| Price (derived from `derivedETH` × `ethPriceUSD`) | **$224.72** |
+| Price (derived from pool `token0Price`/`token1Price`) | **$224.69** |
+| Cross-check | Agrees with DexScreener for the same token |
+
+**Why the block lag is the liveness proof.** An 18-second lag behind chain head
+cannot be produced by a fixture or a cached response. It is only achievable by
+querying an actively-indexing subgraph, and it changes on every run. The two
+independently derived prices agreeing to within $0.03 — one via ETH
+denomination, the other via the pool's own token ratio — confirms the figure is
+a real market price and not an artifact of one code path.
+
+**Phantom-liquidity filter worked.** The script correctly flagged zero-volume
+pools (NVDAon/AP and others) so they are excluded as a price source — pools can
+hold large TVL while never trading, and their prices are meaningless.
+
+### Derived, not read directly
+
+The v4 schema exposes no USD price on `Token`, and no 24h volume on `Pool`:
+
+- **Price** = `token.derivedETH` × `bundle.ethPriceUSD`.
+- **Pool price** = `token1Price` when our token is `token0`, else `token0Price`
+  (schema: `token0Price` is "token0 per token1"). Reversing this silently
+  inverts the price.
+- **24h volume** = nested `poolDayData` rows. `Pool.volumeUSD` is cumulative
+  since inception, not 24h, and is unusable for detecting untraded pools.
+- TVL is `Pool.totalValueLockedUSD` but `PoolDayData.tvlUSD` — the entities
+  genuinely differ.
+
+Run `node graph-price.mjs --introspect` to dump the live schema and confirm any
+of the above against the subgraph itself.
+
+---
+
 ## Reproducing
 
 ```bash
-node send-hbar.mjs        # wallet signing test
+node send-hbar.mjs        # 1. wallet signing test
 
-node x402-server.mjs      # terminal 1
-node x402-client.mjs      # terminal 2
+node x402-server.mjs      # 2. terminal 1
+node x402-client.mjs      #    terminal 2
+
+node graph-price.mjs      # 3. live Graph data
 ```
 
-Requires a funded Hedera testnet ECDSA account. Secrets live in a gitignored
-local env file and are never committed.
+Sections 1–2 require a funded Hedera testnet ECDSA account; section 3 requires a
+free Graph API key from https://thegraph.com/studio. Secrets live in a
+gitignored local env file and are never committed.
