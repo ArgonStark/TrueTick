@@ -10,7 +10,9 @@ Together they cover both halves of TrueTick:
 - **Payments** — a wallet that signs, and an x402-gated service whose payments
   settle through the **Blocky402** facilitator (sections 1–2).
 - **Data** — live tokenized-stock price and liquidity from **The Graph** as a
-  load-bearing source, not static or local data (section 3).
+  load-bearing source, not static or local data (section 3), including a
+  subgraph we forked, fixed and published ourselves to cover pools no existing
+  subgraph indexed (section 4).
 
 Kept up to date as further evidence is gathered.
 
@@ -177,6 +179,86 @@ The v4 schema exposes no USD price on `Token`, and no 24h volume on `Pool`:
 
 Run `node graph-price.mjs --introspect` to dump the live schema and confirm any
 of the above against the subgraph itself.
+
+---
+
+## 4. Published subgraph — indexing data no existing subgraph covered
+
+Base has the deepest tokenized-stock liquidity of any chain we surveyed
+(NVDAc/USDC alone trades ~$9.4M/day), but **no published subgraph indexed those
+pools**. Rather than fall back to a non-Graph data source, we forked, fixed, and
+published one — making The Graph load-bearing as a *publisher*, not only a
+consumer.
+
+| | |
+|---|---|
+| Studio slug | `truetick-aerodrome-base` |
+| Source | [`subgraph/`](subgraph/) |
+| Upstream | `Uniswap/v3-subgraph` @ `b4a0e8d34b8238482cadd3929ae88d3426a7067b` |
+| Target | Aerodrome Slipstream **CLFactory** `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef` |
+| startBlock | `44394724` (2026-04-07T16:19:55Z) |
+| Network | Base |
+
+### Why a fork was necessary
+
+Aerodrome runs more than one CL factory. The only healthy published Aerodrome
+subgraph (`GENunSHWLBXm59mBSgPzQ8metBEp9YDfdqwFr91Av1UM`) indexes factory
+`0x5e7BB104…` — 3,619 pools, $321M TVL, genuinely live at ~4s lag — but the
+tokenized-stock pools live on `0xf8f2eB49…`, which it does not index. Queried
+against it, all four Coinbase tokens return `poolCount: 0, TVL: $0, volume: $0`,
+and the real NVDAc/USDC pool `0x853F5f1B…` resolves to `null`.
+
+### Verification of the target factory
+
+- Blockscout reports the contract name **`CLFactory`** with verified source
+- Its `voter()` returns `0x16613524…`, Aerodrome's ve(3,3) Voter
+- The live NVDAc/USDC pool returns this address from `factory()`
+- startBlock confirmed twice: Blockscout `creation_transaction_hash`
+  `0xef9b902f…`, and an independent RPC `getTransactionReceipt` on that tx
+  returning `blockNumber 44394724` with `contractAddress` equal to the factory
+
+### Two silent-$0 bugs found and fixed
+
+Both would have produced a subgraph that indexed cleanly, reported healthy
+status, and returned `$0` for every value — the worst kind of failure, because
+nothing looks broken.
+
+1. **Wrong USDC address.** Upstream `config/base/chain.ts` whitelisted USDC as
+   `0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e`. `eth_getCode` proves there is
+   **no contract at that address on Base** — it is Avalanche's USDC. Every
+   tokenized stock pairs against real Base USDC
+   (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`, verified `symbol()` = USDC,
+   6 decimals), so none of their pools would have been whitelisted and their
+   tracked TVL and volume would have reported `$0`.
+2. **Unreachable reference pool.** `getEthPriceInUSD()` calls
+   `Pool.load(STABLE_TOKEN_POOL)` against *this subgraph's own store*. Upstream
+   pointed it at a Uniswap v3 pool, which an Aerodrome-only subgraph never
+   indexes, so it returned `ZERO_BD` → `ethPriceUSD = 0` → **every USD field in
+   the entire subgraph $0**. Repointed at Aerodrome CL WETH/USDC
+   `0x3fe04a59…` ($8.3M TVL, $54.9M 24h volume), the deepest WETH/USDC pool on
+   the target factory.
+
+### Slipstream adaptation
+
+Slipstream's factory event drops the fee parameter:
+
+```
+Uniswap v3 : PoolCreated(address,address,uint24,int24,address)
+Slipstream : PoolCreated(address,address,int24,address)
+```
+
+So `feeTier` is read from the pool contract via `try_fee()` rather than the
+event. tickSpacing is **not** a fee — the live NVDAc/USDC pool has
+`tickSpacing 10` but `fee() 500`, and `swap.ts` divides `feeTier` by 1e6 to
+compute `feesUSD`, so substituting tickSpacing would understate fees 50x.
+
+All five pool-level events (`Initialize`, `Swap`, `Mint`, `Burn`, `Collect`) are
+byte-identical between `CLPool` and Uniswap v3, so the Pool template needed no
+changes.
+
+Known limitation: Slipstream has a dynamic swap-fee module, so a `feeTier`
+captured at pool creation can drift if a pool's fee later changes. This affects
+`feesUSD` only; price, TVL and volume are unaffected.
 
 ---
 

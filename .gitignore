@@ -6,3 +6,11 @@
 node_modules/
 npm-debug.log*
 .DS_Store
+
+# subgraph fork: deps and build artefacts.
+# subgraph/.gitignore already covers these, but it came from the upstream clone
+# -- restate them here so nothing leaks if that file is ever edited away.
+# Regenerate with: npm run build -- --network base --subgraph-type v3
+subgraph/node_modules/
+subgraph/build/
+subgraph/generated/

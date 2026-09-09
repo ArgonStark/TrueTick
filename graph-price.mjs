@@ -28,11 +28,27 @@ try {
  * field was rejected. A wrong-but-valid subgraph id fails as a wall of schema
  * errors, which reads like a bad query rather than a bad endpoint.
  */
-const SUBGRAPH_ID =
-  process.env.GRAPH_SUBGRAPH_ID || "DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G";
+const V4_SUBGRAPH_ID = "DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G";
 
 // Uniswap v3 Ethereum mainnet, same source, for tokens whose pools are v3.
 const V3_SUBGRAPH_ID = "5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV";
+
+// --- args ------------------------------------------------------------------
+// `--introspect [SUBGRAPH_ID]` dumps the live schema of any subgraph, so a new
+// source (Aerodrome, a Substreams-backed subgraph, anything) can be mapped from
+// ground truth instead of from memory or a search result.
+const args = process.argv.slice(2);
+const introspectIdx = args.indexOf("--introspect");
+const INTROSPECT = introspectIdx !== -1;
+const introspectId =
+  INTROSPECT &&
+  args[introspectIdx + 1] &&
+  !args[introspectIdx + 1].startsWith("--")
+    ? args[introspectIdx + 1]
+    : null;
+
+const SUBGRAPH_ID =
+  introspectId || process.env.GRAPH_SUBGRAPH_ID || V4_SUBGRAPH_ID;
 
 const GATEWAY = `https://gateway.thegraph.com/api/subgraphs/id/${SUBGRAPH_ID}`;
 
@@ -42,9 +58,11 @@ const GATEWAY = `https://gateway.thegraph.com/api/subgraphs/id/${SUBGRAPH_ID}`;
 // tokenized stock by symbol.
 const DEFAULT_TOKEN = "0x2d1f7226bd1f780af6b9a49dcc0ae00e8df4bdee";
 
-const args = process.argv.slice(2);
-const INTROSPECT = args.includes("--introspect");
-const tokenArg = args.find((a) => !a.startsWith("--"));
+// A positional arg is a token address unless it was consumed as the
+// --introspect subgraph id.
+const tokenArg = args.find(
+  (a) => !a.startsWith("--") && a !== introspectId && /^0x/i.test(a)
+);
 const token = (tokenArg || process.env.TOKEN_ADDRESS || DEFAULT_TOKEN)
   .trim()
   .toLowerCase();
@@ -126,23 +144,47 @@ async function query(gql, variables = {}) {
 // --- introspection mode ----------------------------------------------------
 // So a schema mismatch is never diagnosed by guesswork again.
 if (INTROSPECT) {
+  // Unwrap NonNull/List wrappers so the printed type is the real one.
+  const typeName = (t) => {
+    if (!t) return "?";
+    if (t.name) return t.name;
+    const inner = typeName(t.ofType);
+    return t.kind === "LIST" ? `[${inner}]` : inner;
+  };
+
   const data = await query(`
-    { __schema { types { name kind fields { name type { name kind ofType { name } } } } } }
+    { __schema { types {
+        name kind
+        fields { name type { name kind ofType { name kind ofType { name kind ofType { name } } } } }
+    } } }
   `);
+
   const types = (data.__schema.types || [])
     .filter((t) => t.kind === "OBJECT" && !t.name.startsWith("__") && t.fields)
     .sort((a, b) => a.name.localeCompare(b.name));
+
   console.log(`\n  Live schema of ${SUBGRAPH_ID}\n`);
+  console.log(`  all ${types.length} entity types:`);
+  console.log(`    ${types.map((t) => t.name).join(", ")}\n`);
+
+  // Entity names differ per protocol (Uniswap "Pool" vs Solidly-fork "Pair" or
+  // "LiquidityPool"), so match on a broad pattern rather than a fixed list.
+  // Override with INTROSPECT_FILTER to widen or narrow.
+  const filter = new RegExp(
+    process.env.INTROSPECT_FILTER ||
+      "pool|pair|token|bundle|day|hour|factory|meta|price|liquid",
+    "i"
+  );
+
+  let shown = 0;
   for (const t of types) {
-    if (!/^(Token|Pool|Bundle|PoolDayData|TokenDayData|_Meta_)$/.test(t.name)) continue;
+    if (!filter.test(t.name)) continue;
+    shown++;
     console.log(`  type ${t.name}`);
-    for (const f of t.fields) {
-      const ty = f.type.name || f.type.ofType?.name || f.type.kind;
-      console.log(`      ${f.name}: ${ty}`);
-    }
+    for (const f of t.fields) console.log(`      ${f.name}: ${typeName(f.type)}`);
     console.log("");
   }
-  console.log(`  (${types.length} object types total; showing the price-relevant ones)\n`);
+  console.log(`  (${shown} of ${types.length} types shown; INTROSPECT_FILTER to change)\n`);
   process.exit(0);
 }
 
