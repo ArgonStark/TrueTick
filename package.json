@@ -5,13 +5,21 @@
   "description": "Throwaway PoC: can ethers.js sign and send a value transfer via Hedera testnet's EVM JSON-RPC relay?",
   "type": "module",
   "scripts": {
-    "send": "node send-hbar.mjs"
+    "send": "node send-hbar.mjs",
+    "x402:server": "node x402-server.mjs",
+    "x402:client": "node x402-client.mjs"
   },
   "engines": {
     "node": ">=20.6"
   },
   "license": "UNLICENSED",
   "dependencies": {
-    "ethers": "^6.17.0"
+    "@hashgraph/sdk": "^2.81.0",
+    "@x402/core": "^2.25.0",
+    "@x402/express": "^2.25.0",
+    "@x402/fetch": "^2.25.0",
+    "@x402/hedera": "^2.25.0",
+    "ethers": "^6.17.0",
+    "express": "^5.2.1"
   }
 }
