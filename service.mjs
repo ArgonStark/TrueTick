@@ -14,6 +14,7 @@
  * Try:   curl -s localhost:8402/price/NVDA | jq
  */
 import express from 'express'
+import { fileURLToPath } from 'node:url'
 import { byTicker, byAddress, tickers, TOKENS } from './core/registry.mjs'
 import { buildComparison, buildPoint, THRESHOLDS } from './core/point.mjs'
 import { fetchOnChain, shapeToken, ADAPTER_ID, SUBGRAPH_ID } from './core/adapters/ethereum-univ4.mjs'
@@ -30,6 +31,14 @@ const PORT = Number(process.env.PORT || 8402)
 
 // JSON that is actually readable in a terminal during a demo.
 app.set('json spaces', 2)
+
+/**
+ * Serve the UI from this same process, so the page and the API share an origin
+ * and there is no CORS layer to misconfigure during a live demo. express.static
+ * only answers requests that match a real file, so /price, /tickers and the
+ * rest fall through untouched.
+ */
+app.use(express.static(fileURLToPath(new URL('./ui', import.meta.url))))
 
 app.get('/health', (_req, res) => {
   res.json({
