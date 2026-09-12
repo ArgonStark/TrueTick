@@ -312,6 +312,11 @@ header {
   background: var(--warn-bg); color: var(--warn);
   border: 1px solid var(--warn-border);
   cursor: help;
+  /* Keep each chip on one line. Without this a narrow table cell breaks them
+     mid-phrase -- "US market / closed", "Price divergenc / e" -- which reads as
+     a rendering fault rather than a label. Chips still wrap as whole units via
+     flex-wrap on .flags. */
+  white-space: nowrap;
 }
 .flag.info {
   background: var(--surface-2); color: var(--text-dim); border-color: var(--border);
@@ -391,6 +396,15 @@ tbody tr.flagged { background: rgba(245,165,36,0.035); }
 tbody tr.flagged:hover { background: rgba(245,165,36,0.06); }
 td .sym { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
 td .iss { font-size: 11.5px; color: var(--text-dim); }
+/* DEX names are short two-word proper nouns; breaking them ("Aerodrome /
+   Slipstream", "Uniswap / V3") makes the column look broken rather than tight. */
+td .dex { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+/* The CAIP-2 id is the widest low-value string in the table -- the Solana one
+   alone is 37 characters and it was pushing the STATUS column off the edge.
+   Truncated here, full value still on hover and in the API. */
+td .caip { font-size: 11.5px; color: var(--text-dim); opacity: .6;
+  display: block; max-width: 15ch; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 .null-cell { color: var(--text-dim); cursor: help; }
 
 .srcbadge {
@@ -754,9 +768,17 @@ function render(data) {
         (ref ? '<span class="ref-meta">' + esc(ref.source) + ' · quoted ' + ago(ref.ageSeconds) + '</span>' : '') +
       '</div>' +
     '</div>' +
+    // The second sentence is only TRUE when a reference price exists. On a
+    // ticker with no listed underlying (SpaceX), deviation cannot be measured
+    // against anything, and claiming it is would describe a column of dashes as
+    // a measurement.
     '<p class="hero-sub">The same stock, priced by ' + data.points.length +
-    ' issuer' + (data.points.length === 1 ? '' : 's') +
-    ' on-chain. Deviation is measured against the real-world reference price above.</p>';
+    ' issuer' + (data.points.length === 1 ? '' : 's') + ' on-chain. ' +
+    (data.referencePriceUsd !== null
+      ? 'Deviation is measured against the real-world reference price above.'
+      : 'No real-world reference price exists for this ticker, so deviation stays null — ' +
+        'the venues can still be compared against each other.') +
+    '</p>';
 
   // A venue that failed must be SEEN, not silently missing. Without this the
   // row just disappears and the table looks complete when it is not -- which is
@@ -1092,8 +1114,8 @@ function row(p) {
   return '<tr' + (flagged ? ' class="flagged"' : '') + '>' +
     '<td><div class="sym">' + esc(p.symbol) + '</div><div class="iss">' + esc(p.issuer) + '</div></td>' +
     '<td><span class="iss">' + esc(p.chain) + '</span>' +
-      (p.caip2 ? '<div class="iss" style="opacity:.6">' + esc(p.caip2) + '</div>' : '') + '</td>' +
-    '<td><span class="iss">' + esc(p.source.protocol || '—') + '</span></td>' +
+      (p.caip2 ? '<span class="caip" title="' + esc(p.caip2) + '">' + esc(p.caip2) + '</span>' : '') + '</td>' +
+    '<td><span class="dex">' + esc(p.source.protocol || '—') + '</span></td>' +
     '<td>' + sourceBadge(p.source) + '</td>' +
     '<td class="r num">' + (usd(p.priceUsd) || nullCell(syncing
       ? 'no price yet — subgraph still indexing'
