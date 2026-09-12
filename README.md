@@ -87,6 +87,18 @@ factory `0xf8f2eB4940CFE7d13603DDDD87f123820Fc061Ef`, fixed two bugs that would
 have made every USD value silently `$0`, and published it to the decentralized
 network as `truetick-aerodrome-base`.
 
+**Our published subgraph:**
+
+| | |
+|---|---|
+| Explorer (public) | [`dmEWVWdRS6GajSuddosHSKBJs51z9mjpLmbW4iBgWLg`](https://thegraph.com/explorer/subgraphs/dmEWVWdRS6GajSuddosHSKBJs51z9mjpLmbW4iBgWLg) |
+| Deployment | `QmQX5qLeHm86pbTpUTLsYMxYofGRDFoEw5kV3zQhFFBAZX` |
+| Studio (author's dashboard) | https://thegraph.com/studio/subgraph/truetick-aerodrome-base/ |
+| Source in this repo | [`subgraph/`](subgraph/) |
+
+Use the **Explorer** link to inspect it — the Studio link is our own dashboard
+and redirects anyone else to a login page.
+
 It is **still backfilling** (~26% at the time of writing), so it cannot price
 those tokens yet. That is shown as a distinct `SYNCING` state with the real
 indexed block, chain head and percentage read live from the indexer's public
