@@ -16,6 +16,9 @@ Together they cover both halves of TrueTick:
 - **The two joined** — the real product endpoint behind x402, where a paying
   agent buys genuine normalized deviation data and the payment settles on
   Hedera through Blocky402 (section 5).
+- **A second chain, still on The Graph** — Robinhood Chain has no published
+  subgraph, so its prices come through **Substreams** (section 6), making the
+  deviation table genuinely multi-chain.
 
 Kept up to date as further evidence is gathered.
 
@@ -391,6 +394,114 @@ The shared implementation is [`core/blocky402.mjs`](core/blocky402.mjs). The
 original standalone artefacts from section 2 keep their own inline copy and were
 left untouched, so the proven evidence above still reproduces exactly.
 
+---
+
+## 6. Robinhood Chain via Substreams — a second chain, still on The Graph
+
+Robinhood Chain (chainId 4663) carries deep tokenized-stock liquidity, but **has
+no published subgraph**. The Graph's own networks registry lists
+`"subgraphs": []` for `eip155:4663` — Firehose and Substreams only. So forking a
+subgraph, as in section 4, is not merely slow here: it is unavailable.
+Substreams is the only route to this chain's data through The Graph.
+
+| | |
+|---|---|
+| Adapter | [`core/adapters/robinhood-substreams.mjs`](core/adapters/robinhood-substreams.mjs) |
+| Package | `ethereum_common` v0.3.3 — StreamingFast foundational module, **prebuilt** |
+| Module | `filtered_events` |
+| Endpoints | `mainnet.robinhood.streamingfast.io:443`, `robinhood.substreams.pinax.network:443` (both verified working) |
+| Auth | Graph Market JWT (`SUBSTREAMS_API_TOKEN`) — **not** the Subgraph Studio key |
+| Chain | Robinhood Chain mainnet, chainId 4663, ~0.101s blocks |
+
+### No Rust, and no sync wait
+
+`filtered_events` takes a **query-string parameter**, so the filtering we need is
+configuration rather than a compiled WASM module:
+
+```
+evt_sig:0xc42079f9…  &&  (evt_addr:0xd4eb… || evt_addr:0xb944… || …)
+```
+
+That is the Uniswap V3 `Swap` topic AND'd against our pool addresses. No Rust
+toolchain, no compile step, nothing of ours published to the registry.
+
+It is also a **map module with no stores**, so there is no historical state to
+rebuild. It streams a recent block range and returns. That is the substantive
+difference from the Base subgraph in section 4, which needed ~10 days of
+backfill: nothing here is backfilled at all.
+
+### Live output
+
+```
+NVDA  robinhood  $219.46   TVL $8,197,369   vol $571,620 / 0.56h   robinhood-substreams
+   USDG/NVDA  fee 500     TVL $8,179,951   vol $571,620      <- the real market
+   USDG/NVDA  fee 3000    TVL     $17,335   vol $0
+   USDG/NVDA  fee 100     TVL         $83   vol $0
+   USDG/NVDA  fee 10000   TVL          $0   vol $0
+```
+
+Alongside the two Ethereum issuers this makes NVDA a **three-issuer, two-chain**
+row, with each row labelled by the source that produced it (`Substreams` vs
+`The Graph`) in both the API and the UI.
+
+### What Substreams gives us, and what it does not
+
+**Price and volume are event-sourced.** A Uniswap V3 `Swap` event carries
+`sqrtPriceX96`, so the latest swap *is* the current price. Volume is the summed
+USDG side of the swaps in the streamed window.
+
+**TVL is not in the event stream.** Pool reserves are contract *storage*, not
+events. Reconstructing them from the log would mean replaying every transfer
+since pool creation (~50M blocks), which is the backfill this adapter exists to
+avoid. So TVL comes from one batched `balanceOf` read via Multicall3, and that
+split is **labelled rather than blurred** — the row carries a
+`tvl-via-state-read` caveat and the UI shows it as a badge. Set
+`SUBSTREAMS_TVL=off` to drop TVL back to null and keep the row purely
+event-sourced.
+
+**Volume is labelled with its real window.** The stream processes ~190
+blocks/sec, so a true 24h window (855,785 blocks) would take ~70 minutes. The
+default streams ~34 minutes of chain and the UI says `34m volume`, with
+`volume24hUsd` left null. Calling a 34-minute figure "24h volume" would
+overstate it by roughly 40x.
+
+### Vendored package — registry independence
+
+The package is committed at `vendor/ethereum-common-v0.3.3.spkg` and read from
+disk. Fetching it from the registry failed mid-session with `access denied to
+package on the Substreams registry`, and `spkg.io` returns HTTP 403 to direct
+download with or without a token — which took the whole venue off the table. A
+third-party registry being reachable is not something a live demo should depend
+on.
+
+The vendored file is **byte-identical to the official StreamingFast GitHub
+release**:
+
+```
+sha256  67cfcb8f52a65611d80d2fd6ee951ecb77d848ddcbda0eb5aac839e880b1e020
+        vendor/ethereum-common-v0.3.3.spkg   (446,503 bytes)
+        == github.com/streamingfast/substreams-foundational-modules
+           releases/download/ethereum-common-v0.3.3/ethereum-common-v0.3.3.spkg
+```
+
+Refresh it with the `curl` command documented at the top of the adapter.
+
+### Operational notes found the hard way
+
+- **Concurrent session limit.** The Graph Market tier allows 2 simultaneous
+  Substreams sessions. Every page load opened another, and past two the server
+  answers `ResourceExhausted: Concurrent stream limit exceeded` and the venue
+  silently vanished. Runs are now serialised behind a mutex, results cached, and
+  child processes killed rather than left holding a session.
+- **`--limit-processed-blocks`** defaults to 10,000; our window is larger, so the
+  adapter raises the ceiling to match the window exactly rather than removing it.
+- **Payloads are base64**, not hex — addresses, topics and data all decode from
+  base64 in the JSONL output.
+- **A failed source is now visible.** The UI previously dropped a failed venue
+  and rendered a clean-looking table; `sourceErrors` is now shown as a
+  "SOURCE UNAVAILABLE" banner. Absent-because-unread must never look like
+  absent-because-empty.
+
 ## Reproducing
 
 ```bash
@@ -407,6 +518,12 @@ node paid-service.mjs           # 5. terminal 1 -- real data behind x402
 node paid-client.mjs NVDA       #    terminal 2 -- pays, prints the deviation data
 
 node service.mjs                #    open/free variant, no payment (port 8402)
+
+# 6. Robinhood Chain via Substreams (needs SUBSTREAMS_API_TOKEN)
+brew install streamingfast/tap/substreams
+substreams auth                 #    Graph Market key -> JWT
+node service.mjs                #    Robinhood rows now stream via Substreams
+ROBINHOOD_ADAPTER=rpc node service.mjs   # fallback: direct RPC instead
 ```
 
 Sections 1–2 require a funded Hedera testnet ECDSA account; section 3 requires a

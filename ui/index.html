@@ -289,6 +289,23 @@ header {
   background: var(--surface-2); color: var(--text-dim); border-color: var(--border);
 }
 
+.srcerr {
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  margin-bottom: 14px;
+}
+.srcerr-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+.srcerr-tag {
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em;
+  color: var(--warn); border: 1px solid var(--warn-border);
+  padding: 2px 7px; border-radius: 5px; flex: none;
+}
+.srcerr-name { font-family: var(--mono); color: var(--text); }
+.srcerr-msg { color: var(--text-mid); }
+.srcerr-note { font-size: 11.5px; color: var(--text-dim); margin-top: 6px; }
+
 /* ------------------------------------------------------------------- table */
 
 .section-head {
@@ -326,6 +343,17 @@ tbody tr.flagged:hover { background: rgba(245,165,36,0.06); }
 td .sym { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
 td .iss { font-size: 11.5px; color: var(--text-dim); }
 .null-cell { color: var(--text-dim); cursor: help; }
+
+.srcbadge {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 5px;
+  font-size: 10.5px; font-weight: 500; letter-spacing: 0.02em;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-dim); cursor: help; white-space: nowrap;
+}
+/* The Graph rows get the accent; RPC rows stay neutral. Neither is a warning --
+   this is provenance, not quality, and must not read as a defect. */
+.srcbadge.src-graph { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-dim); }
 
 /* ------------------------------------------------------------------- pools */
 
@@ -421,7 +449,7 @@ footer a { color: var(--text-mid); }
 
   <footer>
     <div class="prov" id="prov">
-      <span>On-chain: Uniswap v4 (Ethereum) via The Graph</span>
+      <span>Sources: <span id="provChain">—</span></span>
       <span>Reference: <span id="provRef">—</span></span>
       <span>Normalized schema — new issuers appear automatically</span>
     </div>
@@ -510,6 +538,14 @@ const CAVEATS = {
                           why: 'The market is open but the reference quote is over 15 minutes old.' },
   'decimals-mismatch':  { label: 'Decimals mismatch',
                           why: 'Registry decimals disagree with the contract — a registry bug, not a market event.' },
+  'tvl-via-state-read': { label: 'TVL via state read', info: true,
+                          why: 'Price and volume come from Substreams. Pool reserves are contract state, not events, so TVL is read directly from the pool contracts and labelled separately.' },
+  'tvl-unavailable':    { label: 'TVL not observable', info: true,
+                          why: 'This source reads events, not contract state, so pool reserves are not visible. It says nothing about the price, which comes from the latest swap.' },
+  'volume-window-short':{ label: 'Volume < 24h', info: true,
+                          why: 'Volume was measured over a shorter window than a day. The figure shown is real and labelled with its actual window.' },
+  'source-error':       { label: 'Source unavailable',
+                          why: 'This venue could not be read. It means we do not know, NOT that the market is empty.' },
   'preview-redacted':   { label: 'Preview (redacted)', info: true,
                           why: 'Free preview: prices are withheld, not zero.' },
 };
@@ -585,22 +621,33 @@ function setLive(data) {
     el('liveText').textContent = 'service unreachable';
     return;
   }
-  const p = data.points[0];
+  // One block number per CHAIN. With two chains in a row, a single unlabelled
+  // block is ambiguous -- and this strip is the "not mocked" proof, so it has to
+  // be precise about what it is proving.
+  const chains = [];
+  for (const pt of data.points) {
+    if (!chains.some((c) => c.chain === pt.chain)) {
+      chains.push({ chain: pt.chain, block: pt.indexedBlock, lag: pt.indexedLagSeconds });
+    }
+  }
   const tick = () => {
-    const age = p ? p.indexedLagSeconds + Math.floor((Date.now() - lastFetchedAt) / 1000) : null;
+    const drift = Math.floor((Date.now() - lastFetchedAt) / 1000);
     const bits = [];
-    if (p) {
-      bits.push('<span class="live-item">block <b class="num">' + p.indexedBlock.toLocaleString('en-US') + '</b></span>');
-      bits.push('<span class="live-item">lag <b class="num">' + age + 's</b></span>');
+    let worst = null;
+    for (const c of chains) {
+      const age = c.lag + drift;
+      worst = worst === null ? age : Math.max(worst, age);
+      bits.push('<span class="live-item">' + esc(c.chain) + ' <b class="num">' +
+        c.block.toLocaleString('en-US') + '</b> <span style="opacity:.7">+' + age + 's</span></span>');
     }
     if (data.reference) {
       bits.push('<span class="live-item">ref <b>' + esc(data.reference.source) + '</b></span>');
     }
-    // Green while the index is genuinely near the head; amber once it drifts.
-    const cls = age === null ? 'dead' : age > 300 ? 'stale' : 'pulse';
+    // Green while every source is near its head; amber once the worst drifts.
+    const cls = worst === null ? 'dead' : worst > 300 ? 'stale' : 'pulse';
     el('live').innerHTML =
       '<span class="live-item"><span class="dot ' + cls + '"></span>' +
-      (age === null ? 'no data' : 'live') + '</span>' + bits.join('');
+      (worst === null ? 'no data' : 'live') + '</span>' + bits.join('');
   };
   tick();
   liveTimer = setInterval(tick, 1000);
@@ -638,17 +685,31 @@ function render(data) {
     ' issuer' + (data.points.length === 1 ? '' : 's') +
     ' on-chain. Deviation is measured against the real-world reference price above.</p>';
 
-  const cards = '<div class="cards">' + data.points.map(card).join('') + '</div>';
+  // A venue that failed must be SEEN, not silently missing. Without this the
+  // row just disappears and the table looks complete when it is not -- which is
+  // exactly how a missing source becomes an invisible one.
+  const errs = (data.sourceErrors || []);
+  const errBanner = errs.length ? '<div class="srcerr">' + errs.map((e) =>
+    '<div class="srcerr-row">' +
+      '<span class="srcerr-tag">SOURCE UNAVAILABLE</span>' +
+      '<span class="srcerr-name">' + esc(e.adapter) + '</span>' +
+      '<span class="srcerr-msg">' + esc(shortErr(e.error)) + '</span>' +
+    '</div>').join('') +
+    '<div class="srcerr-note">This venue is missing from the table below — not empty, unread.</div>' +
+    '</div>' : '';
+
+  const cards = errBanner + '<div class="cards">' + data.points.map(card).join('') + '</div>';
 
   const table =
     '<div class="section-head"><h2>Detail</h2>' +
-    '<p>Every issuer read at the same indexed block</p></div>' +
+    '<p>Live on-chain prices per issuer, with the source behind each row</p></div>' +
     '<div class="table-wrap"><table>' +
       '<caption class="sr-only">Tokenized ' + esc(data.ticker) +
       ' prices and deviation by issuer</caption>' +
       '<thead><tr>' +
         '<th scope="col">Issuer</th>' +
         '<th scope="col">Chain</th>' +
+        '<th scope="col">Source</th>' +
         '<th scope="col" class="r">On-chain</th>' +
         '<th scope="col" class="r">Reference</th>' +
         '<th scope="col" class="r">Deviation</th>' +
@@ -661,11 +722,67 @@ function render(data) {
 
   el('content').innerHTML = head + cards + table;
   el('provRef').textContent = ref ? ref.source : 'unavailable';
+
+  // Derived from the points, never hardcoded -- a new venue changes this line
+  // automatically instead of leaving a stale claim on screen.
+  const srcs = [...new Set(data.points.map((p) => p.source.adapter))];
+  el('provChain').textContent = srcs.join(', ') || 'none';
   setLive(data);
 
   el('content').querySelectorAll('details.pools').forEach((d) => {
     d.querySelector('summary').insertAdjacentHTML('afterbegin', ICON.chev);
   });
+}
+
+/** Upstream errors are verbose; keep the first meaningful line. */
+function shortErr(msg) {
+  const text = String(msg || 'unknown error');
+  if (/Concurrent stream limit|ResourceExhausted/i.test(text)) {
+    return 'Substreams concurrent-session limit reached — retry in a moment.';
+  }
+  if (/SUBSTREAMS_API_TOKEN/i.test(text)) {
+    return 'SUBSTREAMS_API_TOKEN not set (Graph Market credential required).';
+  }
+  if (/not found|ENOENT/i.test(text)) return 'substreams CLI not found on PATH.';
+  const firstLine = text.split('\n').map((l) => l.trim()).filter(Boolean)[0] || text;
+  return firstLine.length > 160 ? firstLine.slice(0, 157) + '…' : firstLine;
+}
+
+/**
+ * Volume, labelled with the window actually measured.
+ *
+ * A Substreams row streams a recent window rather than a full day, so its
+ * figure is real but is NOT 24h volume. Showing it under a "24h volume" heading
+ * would overstate it by more than an order of magnitude, so the heading changes
+ * with the data.
+ */
+function volumeValue(p) {
+  return p.volume24hUsd !== null && p.volume24hUsd !== undefined ? p.volume24hUsd : (p.volumeUsd ?? null);
+}
+function fmtHours(h) {
+  if (!h) return '';
+  return h >= 1 ? h.toFixed(1) + 'h' : Math.round(h * 60) + 'm';
+}
+function volumeLabel(p) {
+  if (p.volume24hUsd !== null && p.volume24hUsd !== undefined) return '24h volume';
+  return p.volumeWindowHours ? fmtHours(p.volumeWindowHours) + ' volume' : 'volume';
+}
+
+/**
+ * Where this row's numbers came from.
+ *
+ * Shown per row rather than in a single footer line, because the sources now
+ * genuinely differ: Ethereum is indexed by The Graph, Robinhood Chain is read
+ * straight from the chain over RPC because it has no published subgraph. A
+ * blanket "powered by The Graph" across every row would be untrue.
+ */
+function sourceBadge(source) {
+  const substreams = /substreams/i.test(source.adapter);
+  const graph = substreams || (/univ4|univ3|subgraph|aerodrome/i.test(source.adapter) && !/rpc/i.test(source.adapter));
+  const label = substreams ? 'Substreams' : graph ? 'The Graph' : 'Direct RPC';
+  const cls = graph ? 'src-graph' : 'src-rpc';
+  return '<span class="srcbadge ' + cls + '" title="' + esc(source.adapter + ' — ' + source.endpointId) + '">' +
+    esc(label) + '</span>';
 }
 
 /** A single issuer card -- the three-second hero. */
@@ -697,7 +814,8 @@ function card(p) {
     '<div class="card-head"><div>' +
       '<div class="issuer">' + esc(p.issuer) + '</div>' +
       '<div class="symbol">' + esc(p.symbol) + '</div>' +
-      '<div class="chain">' + esc(p.chain) + ' · ' + esc(p.tokenAddress.slice(0, 6)) + '…' + esc(p.tokenAddress.slice(-4)) + '</div>' +
+      '<div class="chain">' + esc(p.chain) + ' · ' + esc(p.tokenAddress.slice(0, 6)) + '…' + esc(p.tokenAddress.slice(-4)) +
+        ' · ' + sourceBadge(p.source) + '</div>' +
     '</div>' + badge + '</div>' +
     '<div class="price num' + (price ? '' : ' null') + '">' +
       (price || nullCell('price unavailable — no usable on-chain price')) + '</div>' +
@@ -706,8 +824,8 @@ function card(p) {
     '<div class="card-stats">' +
       '<div><span class="stat-label">Pool TVL</span><span class="stat-val num">' +
         (compactUsd(p.poolTvlUsd) || nullCell('unavailable')) + '</span></div>' +
-      '<div><span class="stat-label">24h volume</span><span class="stat-val num">' +
-        (compactUsd(p.volume24hUsd) || nullCell('unavailable')) + '</span></div>' +
+      '<div><span class="stat-label">' + volumeLabel(p) + '</span><span class="stat-val num">' +
+        (compactUsd(volumeValue(p)) || nullCell('volume unavailable')) + '</span></div>' +
       '<div><span class="stat-label">Pools</span><span class="stat-val num">' + p.pools.length + '</span></div>' +
     '</div>' +
     flagList(q.caveats) +
@@ -726,13 +844,19 @@ function flagList(caveats) {
 
 /** Audit trail: the pools the price actually came from. */
 function poolDetails(p) {
-  const pools = (p.pools || []).filter((x) => x.tvlUsd > 0).slice(0, 4);
+  // Include a pool if it has EITHER liquidity or trading. Filtering on
+  // `tvlUsd > 0` alone hid every pool from event-sourced venues, because
+  // `null > 0` is false -- the card said "4 pools" and expanded to nothing.
+  const pools = (p.pools || [])
+    .filter((x) => (x.tvlUsd ?? 0) > 0 || (x.volume24hUsd ?? 0) > 0)
+    .slice(0, 4);
   if (!pools.length) return '';
   return '<details class="pools"><summary>Top pools (' + p.pools.length + ' total)</summary>' +
     '<div class="pool-list">' + pools.map((pool) =>
       '<div class="pool-row">' +
         '<span class="pair">' + esc(pool.pairSymbol) + '</span>' +
-        '<span class="num">TVL ' + (compactUsd(pool.tvlUsd) || '—') + '</span>' +
+        '<span class="num">TVL ' + (compactUsd(pool.tvlUsd) ||
+          '<span title="not observable from this source">—</span>') + '</span>' +
         '<span class="num">24h ' + (compactUsd(pool.volume24hUsd) || '—') + '</span>' +
       '</div>').join('') +
     '</div></details>';
@@ -751,12 +875,16 @@ function row(p) {
   return '<tr' + (flagged ? ' class="flagged"' : '') + '>' +
     '<td><div class="sym">' + esc(p.symbol) + '</div><div class="iss">' + esc(p.issuer) + '</div></td>' +
     '<td><span class="iss">' + esc(p.chain) + '</span></td>' +
+    '<td>' + sourceBadge(p.source) + '</td>' +
     '<td class="r num">' + (usd(p.priceUsd) || nullCell('no usable on-chain price')) + '</td>' +
     '<td class="r num">' + (usd(p.referencePriceUsd) || nullCell('no reference price available')) + '</td>' +
     '<td class="r num ' + devCls + '" style="font-weight:600">' +
       (dev === null ? nullCell('deviation needs both prices') : esc(dev)) + '</td>' +
-    '<td class="r num">' + (compactUsd(p.poolTvlUsd) || nullCell('unavailable')) + '</td>' +
-    '<td class="r num">' + (compactUsd(p.volume24hUsd) || nullCell('unavailable')) + '</td>' +
+    '<td class="r num">' + (compactUsd(p.poolTvlUsd) ||
+      nullCell(p.poolTvlUsd === null ? 'not observable from an event stream' : 'unavailable')) + '</td>' +
+    '<td class="r num">' + (compactUsd(volumeValue(p)) || nullCell('volume unavailable')) +
+      (p.volume24hUsd === null && p.volumeWindowHours ?
+        '<div class="iss">over ' + fmtHours(p.volumeWindowHours) + '</div>' : '') + '</td>' +
     '<td>' + status + flagList(q.caveats) + '</td>' +
   '</tr>';
 }

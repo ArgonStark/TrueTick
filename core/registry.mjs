@@ -56,6 +56,21 @@ export const ISSUERS = {
     sourceUrl: 'https://ondo.finance/global-markets',
     checkedAt: '2026-09-10',
   },
+  robinhood: {
+    wrapper: 'Robinhood (Robinhood Chain)',
+    jurisdiction: 'United States (Robinhood entities; per public materials)',
+    backing:
+      'Issuer describes tokens representing equity exposure held via a Robinhood entity. ' +
+      'We have NOT verified the custody or backing arrangement.',
+    redemption:
+      'Not verified by us. Do not present redeemability as established fact.',
+    transferRestrictions:
+      'Not verified by us. Tokens are freely transferable on-chain in the mechanical ' +
+      'sense (they trade in public Uniswap V3 pools), but any issuer-level eligibility ' +
+      'or wrapper restriction has NOT been checked.',
+    sourceUrl: 'https://docs.robinhood.com/chain',
+    checkedAt: '2026-09-10',
+  },
   backed: {
     wrapper: 'Backed Finance (xStocks)',
     jurisdiction: 'Switzerland (issuer entity; per public materials)',
@@ -262,6 +277,240 @@ export const TOKENS = {
     adapter: 'ethereum-univ4',
     note: 'Thin: ~$2.4k TVL.',
   },
+
+  // --- Robinhood, Robinhood Chain (chainId 4663) ---------------------------
+  // Verified 2026-09-10 by enumerating every USDG-quoted Uniswap V3 pool on
+  // chain (4,924 pools) and keeping tokens whose ON-CHAIN NAME matches the
+  // issuer pattern '<Company> • Robinhood Token'. Name-matched, never
+  // symbol-matched. Zero duplicate symbols in that set; all 18 decimals.
+  // Priced via SUBSTREAMS on The Graph (this chain has no published subgraph)
+  // -- see core/adapters/robinhood-substreams.mjs. The RPC adapter remains
+  // in the tree as a fallback; set ROBINHOOD_ADAPTER=rpc to use it.
+  '0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec': {
+    ticker: 'NVDA',
+    referenceSymbol: 'NVDA',
+    issuer: 'robinhood',
+    symbol: 'NVDA',
+    name: 'NVIDIA • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    note:
+      'Deepest RWA market on the chain: ~$3.6M USDG in pools, ~15x the Ethereum Ondo pool.',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0xc277560df3689a401ba7dedd7626168b234ceb5e', fee: 10000, ourTokenIsToken0: false },
+      { pool: '0xb75d2d02b0ec3de50d32e40a4f1a8dae8acc4333', fee: 100, ourTokenIsToken0: false },
+      { pool: '0xd4eb21209c4d6093f80b5b84f5c45cc093ea14a3', fee: 500, ourTokenIsToken0: false },
+      { pool: '0xb944cec30bd4175855215d767adc81f39e5f7e2b', fee: 3000, ourTokenIsToken0: false },
+    ],
+  },
+  '0x1b0e319c6a659f002271b69db8a7df2f911c153e': {
+    ticker: 'GME',
+    referenceSymbol: 'GME',
+    issuer: 'robinhood',
+    symbol: 'GME',
+    name: 'GameStop • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0x0a0675689c2ad2a3ade86539bcbd27b6c0764e9d', fee: 3000, ourTokenIsToken0: true },
+      { pool: '0xe2b46c905e12ab8e2f864e4821a4325884c1b126', fee: 500, ourTokenIsToken0: true },
+      { pool: '0xb7723619e09e9317b3e538e7531ecbb910aec107', fee: 100, ourTokenIsToken0: true },
+      { pool: '0xe9713f453adb9245b19559790c96f470a18f2fdf', fee: 10000, ourTokenIsToken0: true },
+    ],
+  },
+  '0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea': {
+    ticker: 'SPCX',
+    referenceSymbol: null,
+    issuer: 'robinhood',
+    symbol: 'SPCX',
+    name: 'Space Exploration Technologies Corp. Class A Common Stock • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    note:
+      'PRIVATE COMPANY -- no listed underlying, so referenceSymbol stays null, same as SPCXon. With ~$1.5M here it gives a venue-vs-venue comparison with no public market involved.',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0x87c58b43537005189cfc7b512d818dc9125e94fc', fee: 100, ourTokenIsToken0: true },
+      { pool: '0xc61284332117c3fb23a2a56cceffd07f7af60029', fee: 500, ourTokenIsToken0: true },
+      { pool: '0xeb07d9587efd1778dfb9c385ec43ef6d5f9fe401', fee: 3000, ourTokenIsToken0: true },
+      { pool: '0xfbb32c09488e3fc33fe6fd84fe6ae442b4d13a31', fee: 10000, ourTokenIsToken0: true },
+    ],
+  },
+  '0x322f0929c4625ed5bad873c95208d54e1c003b2d': {
+    ticker: 'TSLA',
+    referenceSymbol: 'TSLA',
+    issuer: 'robinhood',
+    symbol: 'TSLA',
+    name: 'Tesla • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0xb349fb08c2712f3a70bad40a4d006b68d67e888b', fee: 10000, ourTokenIsToken0: true },
+      { pool: '0x7868622ff2c3b1b6c8acb15fe0bdaebf043dda48', fee: 100, ourTokenIsToken0: true },
+      { pool: '0xc4f0172d6ac8dd294dd1137d047d5e1893760236', fee: 500, ourTokenIsToken0: true },
+      { pool: '0xf4acdaeeb7022862a763c9b1b885e11191c889e3', fee: 3000, ourTokenIsToken0: true },
+    ],
+  },
+  '0xa30fa36db767ad9ed3f7a60fc79526fb4d56d344': {
+    ticker: 'USO',
+    referenceSymbol: 'USO',
+    issuer: 'robinhood',
+    symbol: 'USO',
+    name: 'United States Oil Fund • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0x02175608f1b5e6b5ed221ccfdc7be197d111d915', fee: 3000, ourTokenIsToken0: false },
+      { pool: '0x6ed11c7dfd8e2ca5620eed29a7b9b53ae90dd0d2', fee: 10000, ourTokenIsToken0: false },
+    ],
+  },
+  '0xd5f3879160bc7c32ebb4dc785f8a4f505888de68': {
+    ticker: 'QQQ',
+    referenceSymbol: 'QQQ',
+    issuer: 'robinhood',
+    symbol: 'QQQ',
+    name: 'Invesco QQQ • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0x4539019b527211998642fec342c85dcb44c7e5e4', fee: 100, ourTokenIsToken0: false },
+      { pool: '0xd60a5d14db690b7afad71f76b108071d7175597d', fee: 500, ourTokenIsToken0: false },
+      { pool: '0xebd78dcfc8a6b3a696f1e191ad1ff321f9579f79', fee: 3000, ourTokenIsToken0: false },
+    ],
+  },
+  '0xec262a75e413fafd0df80480274532c79d42da09': {
+    ticker: 'MSTR',
+    referenceSymbol: 'MSTR',
+    issuer: 'robinhood',
+    symbol: 'MSTR',
+    name: 'Strategy Inc. • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0x2c08bcef714bc8124972b7181494fc598e8ed111', fee: 3000, ourTokenIsToken0: false },
+      { pool: '0x17578c0e0d15da44f31677263114f71ae76653ea', fee: 10000, ourTokenIsToken0: false },
+    ],
+  },
+  '0x411efb0e7f985935daec3d4c3ebaea0d0ad7d89f': {
+    ticker: 'SLV',
+    referenceSymbol: 'SLV',
+    issuer: 'robinhood',
+    symbol: 'SLV',
+    name: 'iShares Silver Trust • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0x37ed4621d1eb3abc9e551a888e6aaf0a41f7be8e', fee: 500, ourTokenIsToken0: true },
+      { pool: '0x0fa7bc480885dcf58ad2ef63ec7289cf2481d51c', fee: 10000, ourTokenIsToken0: true },
+      { pool: '0x8cb787e6c315d464775289bad00fdd67d53ecb3d', fee: 3000, ourTokenIsToken0: true },
+    ],
+  },
+  '0x117cc2133c37b721f49de2a7a74833232b3b4c0c': {
+    ticker: 'SPY',
+    referenceSymbol: 'SPY',
+    issuer: 'robinhood',
+    symbol: 'SPY',
+    name: 'SPDR S&P 500 ETF Trust • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0xa7bb1ac63bbab0c44316e6c8c455213441689167', fee: 500, ourTokenIsToken0: true },
+      { pool: '0xa43b424bc609495aed4bcd88d654934b510b0ad9', fee: 3000, ourTokenIsToken0: true },
+    ],
+  },
+  '0x62fd0668e10d8b72339be2dcf7643001688ff13b': {
+    ticker: 'MRVL',
+    referenceSymbol: 'MRVL',
+    issuer: 'robinhood',
+    symbol: 'MRVL',
+    name: 'Marvell Technology • Robinhood Token',
+    decimals: 18,
+    chain: 'robinhood',
+    chainId: 4663,
+    adapter: 'robinhood-substreams',
+    /**
+     * Pools for this token, discovered once and stored as verified static
+     * facts. Pool membership is chain STATE; the Substreams adapter reads
+     * EVENTS, so it cannot discover pools itself. Re-discover with
+     * scripts/discover-robinhood-pools.mjs if the issuer adds markets.
+     */
+    pools: [
+      { pool: '0xb5e892f0fc6daadda5b927266fe7907e623e4843', fee: 3000, ourTokenIsToken0: false },
+      { pool: '0x06cc0b96be1fa1d754ce2e1228f5d8c616f795b0', fee: 10000, ourTokenIsToken0: false },
+    ],
+  },
+
   '0xe1385fdd5ffb10081cd52c56584f25efa9084015': {
     ticker: 'HOOD',
     referenceSymbol: 'HOOD',

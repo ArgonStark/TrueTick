@@ -15,8 +15,40 @@
  */
 
 import { ISSUERS } from './registry.mjs'
-import { fetchOnChain, shapeToken, ADAPTER_ID } from './adapters/ethereum-univ4.mjs'
+import * as ethereumUniV4 from './adapters/ethereum-univ4.mjs'
+import * as robinhoodRpc from './adapters/robinhood-rpc.mjs'
+import * as robinhoodSubstreams from './adapters/robinhood-substreams.mjs'
 import { getReferencePriceCached } from './reference-price.mjs'
+
+/**
+ * Adapter registry. Adding a venue is an entry here plus a file -- the schema,
+ * the quality rules, the service and the UI are all untouched. That was the
+ * point of the shared contract.
+ *
+ * Every adapter exposes the same two functions:
+ *   fetchOnChain(addresses) -> { meta, ethPriceUSD, tokens }
+ *   shapeToken(raw, address, ethPriceUSD, decimals) -> shaped
+ */
+const ADAPTERS = {
+  [ethereumUniV4.ADAPTER_ID]: ethereumUniV4,
+  [robinhoodRpc.ADAPTER_ID]: robinhoodRpc,
+  [robinhoodSubstreams.ADAPTER_ID]: robinhoodSubstreams,
+}
+
+/**
+ * Escape hatch: ROBINHOOD_ADAPTER=rpc swaps the Substreams adapter for the
+ * direct-RPC one. Substreams is the Graph-native path and the default; the RPC
+ * adapter stays available so a missing Substreams credential cannot take the
+ * whole venue offline.
+ */
+function resolveAdapterId(id) {
+  if (id === robinhoodSubstreams.ADAPTER_ID && (process.env.ROBINHOOD_ADAPTER || '').toLowerCase() === 'rpc') {
+    return robinhoodRpc.ADAPTER_ID
+  }
+  return id
+}
+
+const ADAPTER_ID = ethereumUniV4.ADAPTER_ID
 
 /**
  * @typedef {import('./types.ts').TokenizedStockPoint} TokenizedStockPoint
@@ -68,19 +100,36 @@ function judge({
   reference,
   source,
   decimalsMatch,
+  sourceError,
+  extraCaveats = [],
 }) {
   /** @type {string[]} */
   const caveats = []
 
-  if (poolCount === 0) caveats.push('no-pools')
+  // A read that FAILED must never render as "this token has no pools". One is
+  // a fact about the market; the other is a fact about our plumbing, and
+  // dressing the second up as the first is exactly the silent lie this project
+  // keeps designing against.
+  if (sourceError) caveats.push('source-error')
+  else if (poolCount === 0) caveats.push('no-pools')
 
   // Phantom liquidity: capital sitting in pools that nobody trades against.
   // Judged over today AND yesterday so a quiet morning is not mistaken for a
   // dead market.
-  const recentVolume = volume24hUsd + volumePrevDayUsd
-  const phantomLiquidity = poolTvlUsd > 0 && recentVolume === 0
+  // volume24hUsd is null when the source measured a shorter window than a day.
+  // NOTE the trap: `null + 0` is 0 in JavaScript, so summing first would turn
+  // "we did not measure" into "nothing traded" and flag a live market as thin.
+  // Unknown stays unknown.
+  const volumeKnown = volume24hUsd !== null && volume24hUsd !== undefined
+  const recentVolume = volumeKnown ? volume24hUsd + volumePrevDayUsd : null
+  // poolTvlUsd is null when the venue cannot observe reserves (event-only
+  // sources). Unknown TVL must not be read as "TVL exists but nothing trades".
+  const phantomLiquidity =
+    poolTvlUsd !== null && poolTvlUsd > 0 && recentVolume !== null && recentVolume === 0
   if (phantomLiquidity) caveats.push('phantom-liquidity')
-  else if (poolCount > 0 && recentVolume < THRESHOLDS.thinVolumeUsd) caveats.push('thin-volume')
+  else if (poolCount > 0 && recentVolume !== null && recentVolume < THRESHOLDS.thinVolumeUsd) {
+    caveats.push('thin-volume')
+  }
 
   if (priceDivergencePct !== null && priceDivergencePct > THRESHOLDS.priceDivergencePct) {
     caveats.push('price-divergence')
@@ -103,6 +152,7 @@ function judge({
   if (referenceStale) caveats.push('reference-stale')
 
   const priceReliable =
+    !sourceError &&
     priceUsd !== null &&
     poolCount > 0 &&
     !phantomLiquidity &&
@@ -119,6 +169,11 @@ function judge({
     reference !== null &&
     reference.marketOpen &&
     !referenceStale
+
+  // Adapter-specific caveats (e.g. 'tvl-unavailable' from an event-only source)
+  // are informational: they describe what a venue cannot see, not a fault in
+  // the price, so they do not by themselves make a price unreliable.
+  for (const c of extraCaveats) if (!caveats.includes(c)) caveats.push(c)
 
   return { priceReliable, deviationReliable, phantomLiquidity, caveats }
 }
@@ -154,6 +209,8 @@ export function buildPoint({ address, entry, shaped, source, reference, referenc
     reference,
     source,
     decimalsMatch,
+    sourceError: shaped.sourceError ?? null,
+    extraCaveats: shaped.extraCaveats ?? [],
   })
 
   return {
@@ -168,6 +225,10 @@ export function buildPoint({ address, entry, shaped, source, reference, referenc
     priceUsd,
     poolTvlUsd: shaped.poolTvlUsd,
     volume24hUsd: shaped.volume24hUsd,
+    // Present when the source measured a window shorter than 24h, so a partial
+    // figure can be shown truthfully instead of being dropped or mislabelled.
+    volumeUsd: shaped.volumeUsd ?? null,
+    volumeWindowHours: shaped.volumeWindowHours ?? null,
 
     referencePriceUsd,
     deviationPct,
@@ -201,6 +262,7 @@ export async function buildComparison(ticker, entries) {
       referencePriceUsd: null,
       reference: null,
       referenceError: 'no registered tokens for this ticker',
+      sourceErrors: [],
       points: [],
       fetchedAt: new Date().toISOString(),
     }
@@ -211,21 +273,44 @@ export async function buildComparison(ticker, entries) {
   // underlying (SpaceX), and that null flows through to a null deviation.
   const referenceSymbol = entries.find((e) => e.referenceSymbol)?.referenceSymbol ?? null
 
-  // On-chain and reference fetches are independent -- run them together, and
-  // let either fail without taking the other down.
-  const [onChainResult, referenceResult] = await Promise.allSettled([
-    fetchOnChain(entries.map((e) => e.address)),
+  // Group by adapter: one ticker can now span venues on different chains.
+  /** @type {Record<string, Array<object>>} */
+  const byAdapter = {}
+  for (const e of entries) {
+    const id = resolveAdapterId(e.adapter || ADAPTER_ID)
+    if (!ADAPTERS[id]) continue // unknown adapter: skipped, never faked
+    ;(byAdapter[id] ||= []).push(e)
+  }
+
+  // Every adapter and the reference run together; any one may fail without
+  // taking the others down.
+  const adapterIds = Object.keys(byAdapter)
+  const settled = await Promise.allSettled([
+    ...adapterIds.map((id) => {
+      const group = byAdapter[id]
+      const addrs = group.map((e) => e.address)
+      if (id !== robinhoodSubstreams.ADAPTER_ID) return ADAPTERS[id].fetchOnChain(addrs)
+      // Substreams reads events; pool membership is state, so it comes from the
+      // registry, and the head block comes from a single cheap RPC call.
+      const poolsByToken = new Map(group.map((e) => [e.address, e.pools ?? []]))
+      return robinhoodSubstreams
+        .currentHead()
+        .then((head) => robinhoodSubstreams.fetchOnChain(addrs, { poolsByToken, head }))
+    }),
     getReferencePriceCached(referenceSymbol),
   ])
 
-  if (onChainResult.status === 'rejected') {
-    // The on-chain side is the product. Without it there is no point to return,
-    // so this surfaces as an error rather than a row full of nulls pretending
-    // to be data.
-    throw new Error(`on-chain fetch failed: ${onChainResult.reason?.message ?? onChainResult.reason}`)
-  }
+  const referenceResult = settled[settled.length - 1]
+  const adapterResults = settled.slice(0, adapterIds.length)
 
-  const { meta: source, ethPriceUSD, tokens } = onChainResult.value
+  // If EVERY venue failed there is nothing to return but errors -- say so
+  // rather than emitting a row of nulls that reads like real, calm data.
+  if (adapterResults.every((r) => r.status === 'rejected')) {
+    throw new Error(
+      'all on-chain sources failed: ' +
+        adapterResults.map((r) => r.reason?.message ?? r.reason).join('; ')
+    )
+  }
 
   const reference = referenceResult.status === 'fulfilled' ? referenceResult.value.meta : null
   const referencePriceUsd =
@@ -239,11 +324,28 @@ export async function buildComparison(ticker, entries) {
       ? referenceResult.value.error
       : String(referenceResult.reason?.message ?? referenceResult.reason)
 
-  const points = entries.map((entry) => {
-    const raw = tokens.get(entry.address) ?? { token: null, pools: [] }
-    const shaped = shapeToken(raw, entry.address, ethPriceUSD)
-    return buildPoint({ address: entry.address, entry, shaped, source, reference, referencePriceUsd })
+  const points = []
+  adapterIds.forEach((id, i) => {
+    const result = adapterResults[i]
+    // A venue that failed is omitted, and the omission is recorded in
+    // sourceErrors -- never silently rendered as an empty or zeroed row.
+    if (result.status === 'rejected') return
+    const { meta: source, ethPriceUSD, tokens } = result.value
+    const mod = ADAPTERS[id]
+    for (const entry of byAdapter[id]) {
+      const raw = tokens.get(entry.address) ?? { token: null, pools: [] }
+      const shaped = mod.shapeToken(raw, entry.address, ethPriceUSD, entry.decimals, entry.symbol)
+      points.push(
+        buildPoint({ address: entry.address, entry, shaped, source, reference, referencePriceUsd })
+      )
+    }
   })
+
+  const sourceErrors = adapterIds
+    .map((id, i) => (adapterResults[i].status === 'rejected'
+      ? { adapter: id, error: String(adapterResults[i].reason?.message ?? adapterResults[i].reason) }
+      : null))
+    .filter(Boolean)
 
   // Deepest market first: that is the price a reader should weigh most.
   points.sort((a, b) => b.poolTvlUsd - a.poolTvlUsd)
@@ -253,6 +355,8 @@ export async function buildComparison(ticker, entries) {
     referencePriceUsd,
     reference,
     referenceError,
+    // Venues that failed this request. Empty array is the normal case.
+    sourceErrors,
     points,
     fetchedAt: new Date().toISOString(),
   }

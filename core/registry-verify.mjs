@@ -24,11 +24,22 @@ try {
 const SUBGRAPH_ID = 'DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G'
 const GATEWAY = `https://gateway.thegraph.com/api/subgraphs/id/${SUBGRAPH_ID}`
 
-const RPCS = [
-  'https://ethereum-rpc.publicnode.com',
-  'https://rpc.ankr.com/eth',
-  'https://cloudflare-eth.com',
-]
+/**
+ * One RPC list per chain. The registry now spans chains, and checking a
+ * Robinhood token against an Ethereum node reports "NO CONTRACT CODE" -- a
+ * false alarm that would train a reader to ignore this script entirely.
+ */
+const RPCS_BY_CHAIN = {
+  1: [
+    'https://ethereum-rpc.publicnode.com',
+    'https://rpc.ankr.com/eth',
+    'https://cloudflare-eth.com',
+  ],
+  4663: [
+    process.env.ROBINHOOD_RPC_URL || 'https://robinhood.rpc.service.pinax.network',
+    'https://rpc.mainnet.chain.robinhood.com',
+  ],
+}
 
 const SEL = { symbol: '0x95d89b41', decimals: '0x313ce567', name: '0x06fdde03' }
 
@@ -61,38 +72,54 @@ function decodeString(hex) {
 
 const addresses = Object.keys(TOKENS)
 
-/**
- * Choose an RPC by proving it can answer a call we know the answer to.
- * A dead or rate-limited endpoint returns empty results that look exactly like
- * "this contract does not exist" -- that misreading has burned us before, so
- * an endpoint has to earn trust before its answers count as evidence.
- */
-let RPC = null
-for (const url of RPCS) {
-  try {
-    const control = decodeString(
-      await rpc(url, 'eth_call', [{ to: addresses[0], data: SEL.symbol }, 'latest'])
-    )
-    if (control === TOKENS[addresses[0]].symbol) {
-      RPC = url
-      break
-    }
-    console.log(`  skip ${url}: control returned ${control}`)
-  } catch (e) {
-    console.log(`  skip ${url}: ${e.message.slice(0, 60)}`)
-  }
+// Group by chain so each entry is checked against the chain it actually lives on.
+const byChain = {}
+for (const a of addresses) {
+  const id = TOKENS[a].chainId
+  ;(byChain[id] ||= []).push(a)
 }
-if (!RPC) {
-  console.error('\n  x No RPC could answer the control call.')
-  console.error('    NOT concluding anything about these contracts -- rerun later.\n')
-  process.exit(2)
+
+/**
+ * Choose an RPC by proving it can answer a call we already know the answer to.
+ * A dead or rate-limited endpoint returns empty results that look exactly like
+ * "this contract does not exist" -- that misreading has burned us before, so an
+ * endpoint has to earn trust before its answers count as evidence.
+ */
+async function pickRpc(chainId, controlAddress, expectedSymbol) {
+  for (const url of RPCS_BY_CHAIN[chainId] || []) {
+    try {
+      const got = decodeString(
+        await rpc(url, 'eth_call', [{ to: controlAddress, data: SEL.symbol }, 'latest'])
+      )
+      if (got === expectedSymbol) return url
+      console.log(`  skip ${url}: control returned ${got}`)
+    } catch (e) {
+      console.log(`  skip ${url}: ${e.message.slice(0, 60)}`)
+    }
+  }
+  return null
+}
+
+const RPC_FOR = {}
+for (const chainId of Object.keys(byChain)) {
+  const first = byChain[chainId][0]
+  const url = await pickRpc(Number(chainId), first, TOKENS[first].symbol)
+  if (!url) {
+    console.error(`\n  x No RPC for chain ${chainId} could answer the control call.`)
+    console.error('    NOT concluding anything about those contracts -- rerun later.\n')
+    process.exit(2)
+  }
+  RPC_FOR[chainId] = url
 }
 
 const apiKey = (process.env.GRAPH_API_KEY || '').trim()
 let indexed = {}
 if (apiKey) {
+  // The Uniswap v4 subgraph only knows Ethereum tokens; asking it about
+  // Robinhood addresses would return nothing and look like a failure.
+  const ethAddresses = addresses.filter((a) => TOKENS[a].chainId === 1)
   const body = {
-    query: `{ tokens(where: { id_in: ${JSON.stringify(addresses)} }, first: 100) {
+    query: `{ tokens(where: { id_in: ${JSON.stringify(ethAddresses)} }, first: 100) {
       id symbol name decimals totalValueLockedUSD } }`,
   }
   const j = await fetch(GATEWAY, {
@@ -110,12 +137,15 @@ if (apiKey) {
   console.log('  ! GRAPH_API_KEY not set -- checking contracts only, skipping subgraph cross-check')
 }
 
-console.log(`\n  Verifying ${addresses.length} registry entries against ${RPC}\n`)
+console.log(`\n  Verifying ${addresses.length} registry entries`)
+for (const [id, url] of Object.entries(RPC_FOR)) console.log(`    chain ${id}: ${url}`)
+console.log('')
 
 let bad = 0
 for (const address of addresses) {
   const e = TOKENS[address]
   const problems = []
+  const RPC = RPC_FOR[e.chainId]
   try {
     const [symHex, decHex, nameHex, code] = await Promise.all([
       rpc(RPC, 'eth_call', [{ to: address, data: SEL.symbol }, 'latest']),
@@ -137,9 +167,12 @@ for (const address of addresses) {
     if (sg) {
       if (sg.symbol !== e.symbol) problems.push(`subgraph symbol "${sg.symbol}" != registry`)
       if (Number(sg.decimals) !== e.decimals) problems.push(`subgraph decimals ${sg.decimals} != registry`)
-    } else if (apiKey) {
+    } else if (apiKey && e.chainId === 1) {
       problems.push('not indexed by the Uniswap v4 subgraph')
     }
+    // chainId !== 1: no subgraph exists for that chain, so the contract read
+    // above is the only available source. Absence of a second source is stated,
+    // not silently treated as a pass.
 
     // A null referenceSymbol is a deliberate statement that no listed
     // underlying exists; anything else must look like a ticker.
@@ -150,6 +183,7 @@ for (const address of addresses) {
     const tvl = sg ? `$${Number(sg.totalValueLockedUSD).toFixed(0)}` : '-'
     console.log(
       `  ${problems.length ? 'FAIL' : ' ok '}  ${address}  ${e.symbol.padEnd(9)} ` +
+        `${String(e.chainId).padEnd(5)} ` +
         `${String(decimals).padStart(2)}dp  tvl ${tvl.padEnd(10)} ${e.ticker.padEnd(5)} ` +
         `ref ${String(e.referenceSymbol).padEnd(5)}`
     )
@@ -161,9 +195,14 @@ for (const address of addresses) {
   }
 }
 
+const ethCount = addresses.filter((a) => TOKENS[a].chainId === 1).length
+const otherCount = addresses.length - ethCount
 console.log(
   bad === 0
-    ? `\n  All ${addresses.length} entries verified against contract + subgraph.\n`
+    ? `\n  All ${addresses.length} entries verified.\n` +
+      `    ${ethCount} on Ethereum: contract + Uniswap v4 subgraph (two sources agreed).\n` +
+      `    ${otherCount} on other chains: contract read only -- no subgraph exists for those\n` +
+      `    networks, so there is no second source to cross-check against.\n`
     : `\n  ${bad} of ${addresses.length} entries FAILED verification.\n`
 )
 process.exit(bad === 0 ? 0 : 1)

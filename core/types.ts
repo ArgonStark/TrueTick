@@ -71,7 +71,12 @@ export interface PoolSnapshot {
   pairSymbol: string
   quoteSymbol: string
   feeTier: number | null
-  tvlUsd: number
+  /**
+   * Null when the source cannot observe reserves. An event-stream source
+   * (Substreams) sees swaps, not pool state, so TVL is genuinely unknown there
+   * -- null, never 0.
+   */
+  tvlUsd: number | null
   volume24hUsd: number
   /** Price of our token denominated in the pool's other token. */
   priceInQuote: number | null
@@ -135,6 +140,21 @@ export type QualityCaveat =
   | 'price-divergence'
   /** Registry decimals disagree with the chain -- a registry bug, not a market event. */
   | 'decimals-mismatch'
+  /**
+   * The venue could not be read (timeout, partial scan). Distinct from
+   * 'no-pools': this says we do not KNOW, not that the market is empty.
+   */
+  | 'source-error'
+  /**
+   * This source reads events, not contract state, so pool reserves are not
+   * observable. Informational -- it does not impugn the price.
+   */
+  | 'tvl-unavailable'
+  /**
+   * Volume was measured over less than a day, so `volume24hUsd` is null and the
+   * real figure sits in `volumeUsd` / `volumeWindowHours`.
+   */
+  | 'volume-window-short'
   | (string & {})
 
 // ------------------------------------------------------------- the contract --
@@ -171,8 +191,18 @@ export interface TokenizedStockPoint {
 
   // --- on-chain market ---
   priceUsd: number | null
-  poolTvlUsd: number
-  volume24hUsd: number
+  /** Null when the source cannot observe reserves. See PoolSnapshot.tvlUsd. */
+  poolTvlUsd: number | null
+  /**
+   * Null when the source did not measure a full day. A shorter measurement is
+   * reported in `volumeUsd` with its window in `volumeWindowHours` -- a 34-minute
+   * figure must never be presented as a day's volume.
+   */
+  volume24hUsd: number | null
+  /** Volume over the window actually measured, whatever that window was. */
+  volumeUsd?: number | null
+  /** Length of the window behind `volumeUsd`, in hours. */
+  volumeWindowHours?: number | null
 
   // --- reference & deviation ---
   referencePriceUsd: number | null
