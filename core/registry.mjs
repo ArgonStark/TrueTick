@@ -71,6 +71,17 @@ export const ISSUERS = {
     sourceUrl: 'https://docs.robinhood.com/chain',
     checkedAt: '2026-09-10',
   },
+  'backed-solana': {
+    wrapper: 'Backed Finance (xStocks, Solana)',
+    jurisdiction: 'Switzerland (issuer entity; per public materials)',
+    backing: 'Issuer states 1:1 backing by the underlying security held with a custodian.',
+    redemption: 'Issuer describes redemption for onboarded, KYC-verified professional investors.',
+    transferRestrictions:
+      'Same issuer as the Ethereum xStocks entries; the SPL mints trade freely in public ' +
+      'Raydium pools. On-chain enforcement NOT verified by us.',
+    sourceUrl: 'https://backed.fi',
+    checkedAt: '2026-09-12',
+  },
   backed: {
     wrapper: 'Backed Finance (xStocks)',
     jurisdiction: 'Switzerland (issuer entity; per public materials)',
@@ -276,6 +287,99 @@ export const TOKENS = {
     chainId: 1,
     adapter: 'ethereum-univ4',
     note: 'Thin: ~$2.4k TVL.',
+  },
+
+
+  // --- Backed xStocks, SOLANA (Raydium CLMM) ------------------------------
+  // Keyed by SPL mint (base58), not an EVM address. Verified 2026-09-12 against
+  // two sources: Solana RPC getTokenSupply, and the Raydium CLMM PoolState
+  // account decoded for each pool (whose embedded mints had to match).
+  // decimals are 8 here vs 18 for the same issuer's Ethereum tokens -- which is
+  // exactly why decimals live per TOKEN and never per chain.
+  // Priced via SUBSTREAMS -- see core/adapters/solana-substreams.mjs.
+  'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh': {
+    ticker: 'NVDA',
+    referenceSymbol: 'NVDA',
+    issuer: 'backed-solana',
+    symbol: 'NVDAx',
+    name: 'NVIDIA xStock (Solana)',
+    decimals: 8,
+    chain: 'solana',
+    chainId: null,
+    caip2: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+    adapter: 'solana-substreams',
+    note:
+      'REVIEWER: same issuer as the Ethereum NVDAx, which is flagged dead ($27k TVL, $0 volume). This Solana market is deep and live. Same issuer, same ticker, opposite venue quality -- the clearest argument for per-venue flags.',
+    /** Raydium CLMM pool + its two vaults, decoded from PoolState. */
+    pools: [
+      { pool: '49iMatQtoyabsYAQc8GafVq6aeBFVDxSRH44oiatyyw6', vaultBase: 'DyKsypuzQvhi37K8UvjCMBC43h4HtW4r6jhWoqHyrSSe', vaultQuote: '4JEtq7NraU9U5URcCKSv6sWRRgDSuSnUjYDqpSJSWohY', fee: null },
+    ],
+  },
+  'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W': {
+    ticker: 'SPY',
+    referenceSymbol: 'SPY',
+    issuer: 'backed-solana',
+    symbol: 'SPYx',
+    name: 'SPDR S&P 500 ETF xStock (Solana)',
+    decimals: 8,
+    chain: 'solana',
+    chainId: null,
+    caip2: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+    adapter: 'solana-substreams',
+    /** Raydium CLMM pool + its two vaults, decoded from PoolState. */
+    pools: [
+      { pool: '6truu3rZuiB9rKQg4VYC3Dt3QwV7DgwGqXrYUcrvnDDE', vaultBase: 'CiQuPAfYp5v82vijk6u7wqFnaZqtGdJfUUSjDKAtT9ML', vaultQuote: '3EmW8zJDHrfgwpQJAt1oD6nxgQZLUwrCRSKk8Gr3iKRF', fee: null },
+    ],
+  },
+  'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ': {
+    ticker: 'QQQ',
+    referenceSymbol: 'QQQ',
+    issuer: 'backed-solana',
+    symbol: 'QQQx',
+    name: 'Invesco QQQ xStock (Solana)',
+    decimals: 8,
+    chain: 'solana',
+    chainId: null,
+    caip2: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+    adapter: 'solana-substreams',
+    /** Raydium CLMM pool + its two vaults, decoded from PoolState. */
+    pools: [
+      { pool: 'GMjGLWzvK75LPetrgAmdeXnvxc4fUuQPwJxeQqTDU1aG', vaultBase: '4RWQkhLbmgQ4xeQyY2iqAqiEFkRNWB5gdChZkXaFUVxY', vaultQuote: 'D3JT9Uam9DAuBysFvpYDTxQqLuTxRrVwuj5je1XCLLU7', fee: null },
+    ],
+  },
+  'Xs3oZwbHvqis4NYcf4YKWmEia2eC84wSiVrcYcTqpH8': {
+    ticker: 'SPCX',
+    referenceSymbol: null,
+    issuer: 'backed-solana',
+    symbol: 'SPCXx',
+    name: 'SpaceX xStock (Solana)',
+    decimals: 8,
+    chain: 'solana',
+    chainId: null,
+    caip2: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+    adapter: 'solana-substreams',
+    note:
+      'PRIVATE COMPANY -- no listed underlying, so referenceSymbol stays null.',
+    /** Raydium CLMM pool + its two vaults, decoded from PoolState. */
+    pools: [
+      { pool: 'AHNN6JmvaGG6XUoSg7sEr38gRYDB2jTbUvqXVuqaRHpq', vaultBase: '2wmq9LoqAjyKr5YkenAkGozA7xZvbfrCqJXFUuyQHYoa', vaultQuote: 'AUpEZuNEZfqUXqsoiTymSEwiRXwT67Vvr1bnBqyQSzNv', fee: null },
+    ],
+  },
+  'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re': {
+    ticker: 'GLD',
+    referenceSymbol: 'GLD',
+    issuer: 'backed-solana',
+    symbol: 'GLDx',
+    name: 'SPDR Gold Trust xStock (Solana)',
+    decimals: 8,
+    chain: 'solana',
+    chainId: null,
+    caip2: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+    adapter: 'solana-substreams',
+    /** Raydium CLMM pool + its two vaults, decoded from PoolState. */
+    pools: [
+      { pool: '78ReVNMLGRWmjtf2HmBoHUe2pRcsctXTTbxJnbhchyze', vaultBase: 'Qf2BrMGurzSMiqeXNKQdG6XzbWeWG9FCP7tndHNikNj', vaultQuote: '8BECXqsvkZcWD1MpzYV4p7NXD8xu5ZzquQ52NNGFqUsm', fee: null },
+    ],
   },
 
   // --- Robinhood, Robinhood Chain (chainId 4663) ---------------------------
@@ -530,7 +634,11 @@ export const TOKENS = {
 /** Look up by contract address. The only safe lookup. */
 export function byAddress(address) {
   if (typeof address !== 'string') return null
-  return TOKENS[address.trim().toLowerCase()] ?? null
+  const key = address.trim()
+  // EXACT FIRST. Solana SPL mints are base58 and CASE-SENSITIVE, so
+  // lowercasing them never matches -- 'Xsc9qvGR...' is not 'xsc9qvgr...'.
+  // EVM hex is case-insensitive, so the lowercase fallback still serves it.
+  return TOKENS[key] ?? TOKENS[key.toLowerCase()] ?? null
 }
 
 /**

@@ -13,7 +13,8 @@
     "graph:price": "node graph-price.mjs",
     "paid:service": "node paid-service.mjs",
     "paid:client": "node paid-client.mjs",
-    "robinhood:warm": "node warm-robinhood.mjs"
+    "robinhood:warm": "node warm-robinhood.mjs",
+    "sources": "curl -s localhost:8402/sources"
   },
   "engines": {
     "node": ">=20.6"

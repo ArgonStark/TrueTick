@@ -73,10 +73,41 @@ function decodeString(hex) {
 const addresses = Object.keys(TOKENS)
 
 // Group by chain so each entry is checked against the chain it actually lives on.
+// Keyed by `chain`, not chainId: Solana has no chain id at all.
 const byChain = {}
 for (const a of addresses) {
-  const id = TOKENS[a].chainId
-  ;(byChain[id] ||= []).push(a)
+  ;(byChain[TOKENS[a].chain] ||= []).push(a)
+}
+
+const SOLANA_RPC = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com'
+
+/**
+ * Solana entries are verified differently -- there is no eth_call. The SPL mint
+ * is confirmed via getTokenSupply (which returns decimals and real supply), and
+ * every registry pool is confirmed to be owned by the Raydium CLMM program.
+ * Symbols are not on-chain metadata for SPL tokens, so symbol is not checkable
+ * here; that is stated rather than silently skipped.
+ */
+async function verifySolana(address, e) {
+  const problems = []
+  const supply = await rpc(SOLANA_RPC, 'getTokenSupply', [address]).catch(() => null)
+  if (!supply?.value) {
+    problems.push('mint not found on Solana')
+    return { problems, decimals: null, extra: '' }
+  }
+  const decimals = Number(supply.value.decimals)
+  if (decimals !== e.decimals) problems.push(`decimals on-chain ${decimals} != registry ${e.decimals}`)
+
+  for (const pool of e.pools ?? []) {
+    const acct = await rpc(SOLANA_RPC, 'getAccountInfo', [pool.pool, { encoding: 'base64' }]).catch(() => null)
+    const owner = acct?.value?.owner
+    if (!owner) problems.push(`pool ${pool.pool.slice(0, 8)} not found`)
+    else if (owner !== 'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK') {
+      problems.push(`pool ${pool.pool.slice(0, 8)} owner ${owner.slice(0, 8)} is not Raydium CLMM`)
+    }
+  }
+  const ui = Number(supply.value.uiAmount ?? 0)
+  return { problems, decimals, extra: `supply ${ui.toLocaleString('en-US', { maximumFractionDigits: 0 })}` }
 }
 
 /**
@@ -101,15 +132,19 @@ async function pickRpc(chainId, controlAddress, expectedSymbol) {
 }
 
 const RPC_FOR = {}
-for (const chainId of Object.keys(byChain)) {
-  const first = byChain[chainId][0]
-  const url = await pickRpc(Number(chainId), first, TOKENS[first].symbol)
+for (const chain of Object.keys(byChain)) {
+  if (chain === 'solana') {
+    RPC_FOR[chain] = SOLANA_RPC
+    continue
+  }
+  const first = byChain[chain][0]
+  const url = await pickRpc(TOKENS[first].chainId, first, TOKENS[first].symbol)
   if (!url) {
-    console.error(`\n  x No RPC for chain ${chainId} could answer the control call.`)
+    console.error(`\n  x No RPC for chain ${chain} could answer the control call.`)
     console.error('    NOT concluding anything about those contracts -- rerun later.\n')
     process.exit(2)
   }
-  RPC_FOR[chainId] = url
+  RPC_FOR[chain] = url
 }
 
 const apiKey = (process.env.GRAPH_API_KEY || '').trim()
@@ -145,7 +180,19 @@ let bad = 0
 for (const address of addresses) {
   const e = TOKENS[address]
   const problems = []
-  const RPC = RPC_FOR[e.chainId]
+  const RPC = RPC_FOR[e.chain]
+
+  if (e.chain === 'solana') {
+    const r = await verifySolana(address, e)
+    console.log(
+      `  ${r.problems.length ? 'FAIL' : ' ok '}  ${address.slice(0, 24).padEnd(26)} ${e.symbol.padEnd(9)} ` +
+        `solana ${String(r.decimals).padStart(2)}dp  ${r.extra.padEnd(18)} ${e.ticker.padEnd(5)} ref ${String(e.referenceSymbol).padEnd(5)}`
+    )
+    for (const p of r.problems) console.log(`          -> ${p}`)
+    if (r.problems.length) bad++
+    continue
+  }
+
   try {
     const [symHex, decHex, nameHex, code] = await Promise.all([
       rpc(RPC, 'eth_call', [{ to: address, data: SEL.symbol }, 'latest']),
@@ -196,13 +243,16 @@ for (const address of addresses) {
 }
 
 const ethCount = addresses.filter((a) => TOKENS[a].chainId === 1).length
-const otherCount = addresses.length - ethCount
+const solCount = addresses.filter((a) => TOKENS[a].chain === 'solana').length
+const otherCount = addresses.length - ethCount - solCount
 console.log(
   bad === 0
     ? `\n  All ${addresses.length} entries verified.\n` +
       `    ${ethCount} on Ethereum: contract + Uniswap v4 subgraph (two sources agreed).\n` +
-      `    ${otherCount} on other chains: contract read only -- no subgraph exists for those\n` +
-      `    networks, so there is no second source to cross-check against.\n`
+      `    ${otherCount} on other EVM chains: contract read only -- no subgraph exists\n` +
+      `    for those networks, so there is no second source to cross-check against.\n` +
+      `    ${solCount} on Solana: SPL mint via getTokenSupply + every pool confirmed\n` +
+      `    owned by the Raydium CLMM program.\n`
     : `\n  ${bad} of ${addresses.length} entries FAILED verification.\n`
 )
 process.exit(bad === 0 ? 0 : 1)

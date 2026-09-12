@@ -318,6 +318,8 @@ export async function fetchOnChain(addresses) {
   /** @type {SourceMeta} */
   const meta = {
     adapter: ADAPTER_ID,
+    protocol: 'Uniswap V3',
+    product: 'Direct RPC',
     // Deliberately the RPC host: this row is NOT from The Graph and must not
     // be able to masquerade as though it were.
     endpointId: RPC_URL,

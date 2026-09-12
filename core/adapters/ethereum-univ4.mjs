@@ -178,6 +178,8 @@ export async function fetchOnChain(addresses) {
   /** @type {SourceMeta} */
   const meta = {
     adapter: ADAPTER_ID,
+    protocol: 'Uniswap v4',
+    product: 'Subgraph',
     endpointId: SUBGRAPH_ID,
     indexedBlock: num(data._meta?.block?.number),
     indexedAt: new Date(blockTs * 1000).toISOString(),

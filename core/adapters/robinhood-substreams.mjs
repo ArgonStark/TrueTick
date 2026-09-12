@@ -518,6 +518,8 @@ export async function fetchOnChain(addresses, opts = {}) {
 function sourceMeta(head, windowHours) {
   return {
     adapter: ADAPTER_ID,
+    protocol: 'Uniswap V3',
+    product: 'Substreams',
     // The Substreams endpoint, so a consumer can see this row came through
     // The Graph's Substreams rather than a plain RPC.
     endpointId: `substreams:${ENDPOINT}/${MODULE} (window ${windowHours.toFixed(1)}h)`,

@@ -18,6 +18,7 @@ import { ISSUERS } from './registry.mjs'
 import * as ethereumUniV4 from './adapters/ethereum-univ4.mjs'
 import * as robinhoodRpc from './adapters/robinhood-rpc.mjs'
 import * as robinhoodSubstreams from './adapters/robinhood-substreams.mjs'
+import * as solanaSubstreams from './adapters/solana-substreams.mjs'
 import { getReferencePriceCached } from './reference-price.mjs'
 
 /**
@@ -33,7 +34,17 @@ const ADAPTERS = {
   [ethereumUniV4.ADAPTER_ID]: ethereumUniV4,
   [robinhoodRpc.ADAPTER_ID]: robinhoodRpc,
   [robinhoodSubstreams.ADAPTER_ID]: robinhoodSubstreams,
+  [solanaSubstreams.ADAPTER_ID]: solanaSubstreams,
 }
+
+/**
+ * Adapters that need pool descriptors and a head block supplied by the caller.
+ *
+ * Substreams reads EVENTS; pool membership and vault addresses are chain STATE,
+ * so they come from the registry rather than being discovered mid-stream. Both
+ * Substreams adapters share this shape, EVM and non-EVM alike.
+ */
+const NEEDS_POOL_CONTEXT = new Set([solanaSubstreams.ADAPTER_ID, robinhoodSubstreams.ADAPTER_ID])
 
 /**
  * Escape hatch: ROBINHOOD_ADAPTER=rpc swaps the Substreams adapter for the
@@ -217,7 +228,8 @@ export function buildPoint({ address, entry, shaped, source, reference, referenc
     ticker: entry.ticker,
     issuer: ISSUERS[entry.issuer]?.wrapper ?? entry.issuer,
     chain: entry.chain,
-    chainId: entry.chainId,
+    chainId: entry.chainId ?? null,
+    caip2: entry.caip2 ?? (entry.chainId ? `eip155:${entry.chainId}` : null),
     tokenAddress: address,
     symbol: entry.symbol,
     decimals: entry.decimals,
@@ -289,13 +301,12 @@ export async function buildComparison(ticker, entries) {
     ...adapterIds.map((id) => {
       const group = byAdapter[id]
       const addrs = group.map((e) => e.address)
-      if (id !== robinhoodSubstreams.ADAPTER_ID) return ADAPTERS[id].fetchOnChain(addrs)
+      if (!NEEDS_POOL_CONTEXT.has(id)) return ADAPTERS[id].fetchOnChain(addrs)
       // Substreams reads events; pool membership is state, so it comes from the
       // registry, and the head block comes from a single cheap RPC call.
+      const mod = ADAPTERS[id]
       const poolsByToken = new Map(group.map((e) => [e.address, e.pools ?? []]))
-      return robinhoodSubstreams
-        .currentHead()
-        .then((head) => robinhoodSubstreams.fetchOnChain(addrs, { poolsByToken, head }))
+      return mod.currentHead().then((head) => mod.fetchOnChain(addrs, { poolsByToken, head }))
     }),
     getReferencePriceCached(referenceSymbol),
   ])

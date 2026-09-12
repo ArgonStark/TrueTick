@@ -178,7 +178,18 @@ export interface TokenizedStockPoint {
   issuer: string
   /** e.g. 'ethereum', 'base'. */
   chain: string
-  chainId: number
+  /**
+   * EVM chain id, or null for non-EVM chains that have none (Solana). Use
+   * `caip2` for a universal identifier.
+   */
+  chainId: number | null
+  /**
+   * CAIP-2 chain identifier, e.g. 'eip155:1' or
+   * 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'. The same identifier The Graph's
+   * networks registry uses, so it generalises past EVM.
+   */
+  caip2?: string | null
+  /** EVM hex address, or an SPL mint (base58) on Solana. Never lowercase-normalise blindly. */
   tokenAddress: string
   /** On-chain symbol, e.g. 'NVDAon' -- distinct from `ticker`. */
   symbol: string
