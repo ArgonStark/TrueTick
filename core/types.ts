@@ -54,6 +54,10 @@ export interface ReferenceMeta {
 /** Provenance and liveness of the on-chain side. */
 export interface SourceMeta {
   adapter: AdapterId
+  /** DEX protocol, e.g. 'Uniswap v4', 'Raydium CLMM'. Declared by the adapter. */
+  protocol?: string
+  /** Graph product, e.g. 'Subgraph', 'Substreams'. Declared by the adapter. */
+  product?: string
   /** Subgraph id, Substreams package, etc. */
   endpointId: string
   /** Block the index had reached when we queried. */
@@ -62,6 +66,31 @@ export interface SourceMeta {
   /** How far the index trails chain head. The liveness proof. */
   indexedLagSeconds: number
   hasIndexingErrors: boolean
+
+  // --- sync state (subgraph sources) ---
+  /**
+   * The index has NOT caught up and cannot answer for these tokens yet.
+   *
+   * Distinct from an error and from an empty market. A syncing venue returns a
+   * complete point with null prices, so the row stays visible and admits what
+   * it does not yet know, rather than vanishing or reporting zeros.
+   */
+  syncing?: boolean
+  synced?: boolean
+  /** Chain head at query time, so sync progress is independently checkable. */
+  chainHeadBlock?: number | null
+  /** First block this index covers. Progress is measured from here, not 0. */
+  startBlock?: number | null
+  /** chainHeadBlock - indexedBlock. Null when head is unknown. */
+  blocksRemaining?: number | null
+  /** Percent of [startBlock, chainHeadBlock] indexed. Null when unknown. */
+  syncProgressPct?: number | null
+  /** Indexer-reported health, e.g. 'healthy' | 'failed'. */
+  indexerHealth?: string | null
+  /** True when WE published this subgraph rather than consuming someone else's. */
+  selfPublished?: boolean
+  /** Human-readable explanation of the sync state. */
+  syncNote?: string | null
 }
 
 /** One pool backing the price, kept so a consumer can audit the number. */
@@ -155,6 +184,16 @@ export type QualityCaveat =
    * real figure sits in `volumeUsd` / `volumeWindowHours`.
    */
   | 'volume-window-short'
+  /**
+   * The subgraph backing this venue has not finished indexing, so it cannot
+   * answer for these tokens yet.
+   *
+   * Deliberately NOT 'no-pools' and NOT 'source-error'. The pools exist and the
+   * read succeeded; our index simply has not reached them. Collapsing this into
+   * either of the others would report a fact about our infrastructure as a fact
+   * about the market.
+   */
+  | 'subgraph-syncing'
   | (string & {})
 
 // ------------------------------------------------------------- the contract --
@@ -248,6 +287,12 @@ export interface TickerComparison {
    * which case the null is correct and permanent.
    */
   referenceError: string | null
+  /**
+   * Venues that failed outright this request, so a missing row can be told from
+   * a row that was never attempted. Empty array is the normal case. A SYNCING
+   * venue does NOT appear here -- it returns a real (null-priced) point instead.
+   */
+  sourceErrors: Array<{ adapter: AdapterId; error: string }>
   points: TokenizedStockPoint[]
   fetchedAt: string
 }

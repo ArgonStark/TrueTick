@@ -82,6 +82,20 @@ export const ISSUERS = {
     sourceUrl: 'https://backed.fi',
     checkedAt: '2026-09-12',
   },
+  coinbase: {
+    wrapper: 'Coinbase (B20 tokenized equities)',
+    jurisdiction: 'United States (Coinbase entities; per public materials)',
+    backing:
+      'Issuer describes tokens tracking the underlying equity. We have NOT verified ' +
+      'the custody or backing arrangement.',
+    redemption: 'Not verified by us. Do not present redeemability as established fact.',
+    transferRestrictions:
+      'Not verified by us. The tokens trade in public Aerodrome Slipstream pools on ' +
+      'Base, so they are mechanically transferable; any issuer-level eligibility gate ' +
+      'has NOT been checked.',
+    sourceUrl: 'https://www.coinbase.com',
+    checkedAt: '2026-09-12',
+  },
   backed: {
     wrapper: 'Backed Finance (xStocks)',
     jurisdiction: 'Switzerland (issuer entity; per public materials)',
@@ -289,6 +303,129 @@ export const TOKENS = {
     note: 'Thin: ~$2.4k TVL.',
   },
 
+
+  // --- Coinbase B20 tokenized equities, BASE (Aerodrome Slipstream) --------
+  // Priced via OUR OWN published subgraph -- see core/adapters/base-aerodrome.mjs.
+  // That subgraph is STILL SYNCING, so these rows render as 'subgraph-syncing'
+  // with null prices until the index reaches these pools. They are registered
+  // now, not later, because the architecture being ready is the claim: no code
+  // changes are needed when the backfill completes, the nulls simply become
+  // numbers.
+  //
+  // Verified 2026-09-12 against TWO independent sources:
+  //   1. Base RPC eth_call -> symbol(), name(), decimals(), totalSupply()
+  //      (mainnet.base.org and base-rpc.publicnode.com, agreeing)
+  //   2. CLFactory.getPool(token0, token1, tickSpacing) on the TARGET factory
+  //      0xf8f2eB49..., confirming each token has a real pool there
+  // The NVDAc/USDC pool resolved to 0x853f5f1b92b16714fe6cda67caad0856b83c7ab9,
+  // matching the pool independently verified during the subgraph fork.
+  //
+  // decimals are 8, like the Solana xStocks and unlike Ondo's 18 -- per TOKEN,
+  // never per chain.
+  //
+  // NOTE on eth_getCode: these addresses return the single byte 0xef rather
+  // than ordinary bytecode, yet answer every standard ERC-20 call identically
+  // from two independent providers. A "does it have bytecode" check is simply
+  // the wrong test for this contract class and would reject seven valid tokens.
+  '0xb20000000000000000000078ee7ce2fe4908108c': {
+    ticker: 'NVDA',
+    referenceSymbol: 'NVDA',
+    issuer: 'coinbase',
+    symbol: 'NVDAc',
+    name: 'NVIDIA Corporation',
+    decimals: 8,
+    chain: 'base',
+    chainId: 8453,
+    adapter: 'base-aerodrome',
+    pools: [
+      { pool: '0x853f5f1b92b16714fe6cda67caad0856b83c7ab9', quote: 'USDC', tickSpacing: 10 },
+      { pool: '0x204b5342c46a7e1be3988e60acb2b7aaca2e40ab', quote: 'USDC', tickSpacing: 200 },
+      { pool: '0x20e5fad2661ee9eb0c04824524030af31943b62d', quote: 'WETH', tickSpacing: 50 },
+    ],
+    note: 'Deepest tokenized-stock market surveyed on any chain (~$9.4M/day).',
+  },
+  '0xb200000000000000000000c2e324d24d7eecd1fb': {
+    ticker: 'AAPL',
+    referenceSymbol: 'AAPL',
+    issuer: 'coinbase',
+    symbol: 'AAPLc',
+    name: 'Apple Inc.',
+    decimals: 8,
+    chain: 'base',
+    chainId: 8453,
+    adapter: 'base-aerodrome',
+    pools: [
+      { pool: '0xa3b1e3f9747065e2073722ff4c9027d3ea4994f0', quote: 'USDC', tickSpacing: 10 },
+      { pool: '0x8feacb3aac9499ba4f53aa16e9cd38c36c57765e', quote: 'USDC', tickSpacing: 200 },
+    ],
+  },
+  '0xb2000000000000000000008bc8786b856e61707c': {
+    ticker: 'META',
+    referenceSymbol: 'META',
+    issuer: 'coinbase',
+    symbol: 'METAc',
+    name: 'Meta Platforms Inc.',
+    decimals: 8,
+    chain: 'base',
+    chainId: 8453,
+    adapter: 'base-aerodrome',
+    pools: [{ pool: '0xeaf57753bc382e0324a1d43f72e7027705a2273e', quote: 'USDC', tickSpacing: 10 }],
+  },
+  '0xb2000000000000000000002d0ba3164cc74f58b7': {
+    ticker: 'GOOGL',
+    referenceSymbol: 'GOOGL',
+    issuer: 'coinbase',
+    symbol: 'GOOGLc',
+    name: 'Alphabet Inc.',
+    decimals: 8,
+    chain: 'base',
+    chainId: 8453,
+    adapter: 'base-aerodrome',
+    pools: [
+      { pool: '0xb1987cad1682841b4b641d50e520777ec5ab5542', quote: 'USDC', tickSpacing: 10 },
+      { pool: '0xc72153764f7a6c9a4cfa5e0834afc2a66100c1aa', quote: 'WETH', tickSpacing: 10 },
+      { pool: '0x25f63549b2bb9fff114cdc39e8cfb16b450e2f9b', quote: 'WETH', tickSpacing: 50 },
+    ],
+  },
+  '0xb2000000000000000000001e800a7f5189430cd0': {
+    ticker: 'TSLA',
+    referenceSymbol: 'TSLA',
+    issuer: 'coinbase',
+    symbol: 'TSLAc',
+    name: 'Tesla Inc.',
+    decimals: 8,
+    chain: 'base',
+    chainId: 8453,
+    adapter: 'base-aerodrome',
+    pools: [{ pool: '0x469337fdcc5e8f38e2e4b670b04f57865d13a7bb', quote: 'USDC', tickSpacing: 10 }],
+  },
+  '0xb200000000000000000000ab99cfa739e253872b': {
+    ticker: 'MSFT',
+    referenceSymbol: 'MSFT',
+    issuer: 'coinbase',
+    symbol: 'MSFTc',
+    name: 'Microsoft Corporation',
+    decimals: 8,
+    chain: 'base',
+    chainId: 8453,
+    adapter: 'base-aerodrome',
+    pools: [{ pool: '0x7103eb3c9590d1281f7dc03b2a9ee27c39df5d54', quote: 'USDC', tickSpacing: 10 }],
+  },
+  '0xb200000000000000000000d9192b6b456483c2e8': {
+    ticker: 'AMZN',
+    referenceSymbol: 'AMZN',
+    issuer: 'coinbase',
+    symbol: 'AMZNc',
+    name: 'Amazon.com Inc.',
+    decimals: 8,
+    chain: 'base',
+    chainId: 8453,
+    adapter: 'base-aerodrome',
+    pools: [
+      { pool: '0x22cf9b71933cac55b69f7cd9c6beb45a6dde5c76', quote: 'USDC', tickSpacing: 1 },
+      { pool: '0xd03bc8c7f2faedce2aac81bf0444aea08ea06e9b', quote: 'USDC', tickSpacing: 10 },
+    ],
+  },
 
   // --- Backed xStocks, SOLANA (Raydium CLMM) ------------------------------
   // Keyed by SPL mint (base58), not an EVM address. Verified 2026-09-12 against

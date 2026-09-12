@@ -25,6 +25,10 @@ Together they cover both halves of TrueTick:
 - **Readable in three seconds** — the UI states the verdict over 4 venues / 3
   chains / 3 DEXes and names each row's chain, DEX and Graph product, with the
   headline spread computed across **reliable venues only** (section 8).
+- **Honest about what is not ready** — our own Base subgraph joins as a fifth
+  venue *while still indexing*: null prices, a distinct `subgraph-syncing`
+  state, live progress from the indexer, and no contribution to the headline
+  spread (section 9).
 
 Kept up to date as further evidence is gathered.
 
@@ -684,6 +688,121 @@ A declared field means a new venue states its own provenance, and the fallback
 adapter can honestly report `Direct RPC` — not The Graph — when it is the one
 answering.
 
+## 9. Base as a fifth venue — our own subgraph, integrated while still syncing
+
+Section 4 described forking and publishing a subgraph for Aerodrome Slipstream.
+This section is about wiring it into the live product **before it finished
+indexing**, without inventing a single number.
+
+| | |
+|---|---|
+| Subgraph id | `dmEWVWdRS6GajSuddosHSKBJs51z9mjpLmbW4iBgWLg` |
+| Deployment | `QmQX5qLeHm86pbTpUTLsYMxYofGRDFoEw5kV3zQhFFBAZX` |
+| Adapter | [`core/adapters/base-aerodrome.mjs`](core/adapters/base-aerodrome.mjs) |
+| Venue | Base · Aerodrome Slipstream · Coinbase B20 equities |
+
+### Why it is not yet servable, stated precisely
+
+The subgraph is published to the decentralized network with an **active
+allocation** (indexer `0xbdfb5ee5…`) but **zero curation signal**, so the
+gateway does not reliably route queries to it — it intermittently answers
+`subgraph not found`. That is a routing fact, not a fault.
+
+The assigned indexer's **public status endpoint answers without an API key**,
+and that is where the honest number comes from:
+
+```
+synced: false   health: healthy   network: base
+latestBlock 46,165,133   chainHeadBlock 51,213,098
+```
+
+Measured from the factory's deployment block (`44394724`), that is **26.0%** of
+the configured range, with ~5.05M blocks to go. Without this endpoint we could
+only say "no data" — which is exactly what a dead subgraph also says.
+
+### Syncing is a THIRD state
+
+The single design decision this section exists to record.
+
+| state | meaning | price |
+|---|---|---|
+| `RELIABLE` | read succeeded, number trustworthy | shown |
+| `FLAGGED` | read succeeded, number **not** trustworthy | shown, marked |
+| `SYNCING` | read succeeded, our index has not reached these pools | **null** |
+| `source-error` | the read itself failed | null, banner |
+| `no-pools` | read succeeded, market genuinely empty | null |
+
+Collapsing `subgraph-syncing` into `no-pools` would report our own backfill as
+an absence of liquidity — a fact about our infrastructure dressed up as a fact
+about the market. Collapsing it into `FLAGGED` would accuse a healthy market of
+being broken. It is neither, so it is its own state end to end: caveat,
+`SourceMeta.syncing`, badge, and outcome-panel row.
+
+### It never throws, and that is deliberate
+
+A rejected adapter lands in `sourceErrors` and the row **disappears**. For a
+syncing venue that would hide precisely what we want visible, so the adapter
+returns a well-formed point with null prices instead. A genuine fault (rejected
+API key, schema mismatch) still throws and still surfaces as an error — the two
+paths are separated by `isNotServableYet()`.
+
+Both degradation paths were tested, not assumed:
+
+| scenario | result |
+|---|---|
+| Gateway cannot serve the subgraph | row renders syncing, progress from the indexer |
+| Gateway **and** status endpoint both unreachable | row renders syncing, "progress unavailable" |
+| Genuine fault | throws → `sourceErrors` banner, as before |
+
+### Excluded from the headline, present in the table
+
+`NVDAc` is counted in coverage but **excluded from the reliable count and from
+the spread** — it has no price, so including it would either break the
+arithmetic or fabricate a comparison:
+
+```
+COVERAGE   5 venues (4 pricing, 1 indexing) · 4 chains · 4 DEXes
+           · via Substreams + Subgraph (1 subgraph published by us)
+RELIABLE   3 of 5 · 0.760% spread
+FLAGGED    NVDAx (ethereum)
+INDEXING   NVDAc (base) 26.0% — no price yet, not counted above
+```
+
+The card shows `—` for price, a progress bar, `block 46,165,133 of 51,213,098 ·
+26.0%`, `5,047,965 blocks to go`, and `subgraph published by us`. The liveness
+strip reports `base … indexing 26.0%` rather than a 117-day lag, and a
+backfilling source is excluded from the worst-lag calculation so it cannot make
+three genuinely live chains look stale.
+
+`GET /sources` carries the same facts machine-readably, including `selfPublished:
+true`, the fork provenance, the target factory, and live `progressPct`.
+
+### Registry: seven tokens, two independent sources
+
+Coinbase B20 equities (NVDAc, AAPLc, METAc, GOOGLc, TSLAc, MSFTc, AMZNc), all 8
+decimals, verified against **both** Base RPC ERC-20 reads *and*
+`CLFactory.getPool(token0, token1, tickSpacing)` on the target factory. The
+NVDAc/USDC pool resolved to `0x853f5f1b92b16714fe6cda67caad0856b83c7ab9` —
+matching the pool independently verified during the fork in section 4.
+
+They are registered **now**, while null, because the claim is that the
+architecture is ready: when the backfill completes, no code changes — the nulls
+become numbers.
+
+### Two bugs this work exposed
+
+1. **`eth_getCode` returns `0xef`** for every B20 token — a single reserved
+   byte, not ordinary bytecode — while all standard ERC-20 calls answer
+   correctly from two independent providers. A "does it have bytecode" check is
+   the wrong test for this contract class; the first version of the check
+   rejected seven valid tokens.
+2. **The registry verifier cried wolf.** Public-RPC throttling printed
+   `FAIL NVDAc` next to a perfectly valid entry. Retries now rotate across
+   sibling endpoints for the same chain. This matters more than it looks: the
+   registry is the one file where a wrong entry silently compares against the
+   wrong stock, and a verifier that raises false alarms gets ignored — taking
+   real mismatches with it. `node core/registry-verify.mjs` → **all 36 verified**.
+
 ## Reproducing
 
 ```bash
@@ -713,6 +832,11 @@ curl -s localhost:8402/price/NVDA | jq  #    4 venues, 3 chains, 2 Graph product
 
 # 8. The verdict panel + per-row provenance
 node service.mjs && open http://localhost:8402/   # outcome panel above the cards
+
+# 9. Base as a fifth venue, still syncing (no extra credential needed)
+curl -s localhost:8402/sources | jq '.graphProducts[0].adapters[1]'   # selfPublished + live progress
+curl -s localhost:8402/price/NVDA | jq '.points[] | select(.chain=="base")'
+node core/registry-verify.mjs        # all 36 entries, three chain families
 ```
 
 Sections 1–2 require a funded Hedera testnet ECDSA account; section 3 requires a

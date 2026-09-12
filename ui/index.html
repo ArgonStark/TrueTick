@@ -52,6 +52,11 @@
   --warn:        #F5A524;   /* flagged: do not trust this number */
   --warn-bg:     #2B2010;
   --warn-border: #6B4E14;
+  /* syncing: a THIRD state. Deliberately not green (not trustworthy yet) and
+     not amber (nothing is wrong) -- this venue simply has no price yet. */
+  --sync:        #7C93B8;
+  --sync-bg:     #1A2233;
+  --sync-border: #33415C;
 
   --radius: 10px;
   --mono: 'Fira Code', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -244,7 +249,29 @@ header {
 }
 .badge.flag { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }
 .badge.ok   { background: var(--up-bg); color: var(--up); border: 1px solid #1D5236; }
+.badge.sync { background: var(--sync-bg); color: var(--sync); border: 1px solid var(--sync-border); }
 .badge svg { width: 12px; height: 12px; }
+
+/* A syncing card is dimmed, not alarmed: nothing is broken. */
+.card.syncing { border-color: var(--sync-border); }
+.card.syncing .price { color: var(--text-dim); }
+.syncbar {
+  height: 4px; border-radius: 3px; background: var(--surface-2);
+  overflow: hidden; margin: 10px 0 6px;
+}
+.syncbar-fill { height: 100%; background: var(--sync); border-radius: 3px; }
+.sync-note {
+  font-size: 11.5px; color: var(--text-dim); font-family: var(--mono);
+  line-height: 1.5;
+}
+.sync-note b { color: var(--text-mid); font-weight: 600; }
+.sync-pub {
+  font-size: 11px; color: var(--sync); margin-top: 6px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+/* Without this the SVG renders at its intrinsic size and swamps the card. */
+.sync-pub svg { width: 12px; height: 12px; flex: none; }
+.badge.sync svg { width: 12px; height: 12px; }
 
 .price {
   font-size: 34px; font-weight: 600; letter-spacing: -0.02em;
@@ -566,6 +593,8 @@ const CAVEATS = {
                           why: 'This source reads events, not contract state, so pool reserves are not visible. It says nothing about the price, which comes from the latest swap.' },
   'volume-window-short':{ label: 'Volume < 24h', info: true,
                           why: 'Volume was measured over a shorter window than a day. The figure shown is real and labelled with its actual window.' },
+  'subgraph-syncing':   { label: 'Subgraph syncing', sync: true,
+                          why: 'Our own published subgraph is still backfilling and has not reached these pools yet. The pools exist and trade — we simply cannot read them yet. Prices are null, never 0, and never guessed.' },
   'source-error':       { label: 'Source unavailable',
                           why: 'This venue could not be read. It means we do not know, NOT that the market is empty.' },
   'preview-redacted':   { label: 'Preview (redacted)', info: true,
@@ -581,6 +610,7 @@ const ICON = {
   down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>',
   warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
   ok:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>',
+  sync: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',
   chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>',
 };
 
@@ -649,7 +679,18 @@ function setLive(data) {
   const chains = [];
   for (const pt of data.points) {
     if (!chains.some((c) => c.chain === pt.chain)) {
-      chains.push({ chain: pt.chain, block: pt.indexedBlock, lag: pt.indexedLagSeconds });
+      chains.push({
+        chain: pt.chain,
+        block: pt.indexedBlock,
+        lag: pt.indexedLagSeconds,
+        // A backfilling source is not "lagging by 117 days" in any sense a
+        // reader benefits from. It reports progress instead, and is excluded
+        // from the worst-lag calculation so it cannot turn the whole strip
+        // amber -- the three live chains really are live.
+        syncing: isSyncing(pt),
+        progress: pt.source && typeof pt.source.syncProgressPct === 'number'
+          ? pt.source.syncProgressPct : null,
+      });
     }
   }
   const tick = () => {
@@ -657,6 +698,12 @@ function setLive(data) {
     const bits = [];
     let worst = null;
     for (const c of chains) {
+      if (c.syncing) {
+        bits.push('<span class="live-item">' + esc(c.chain) + ' <b class="num">' +
+          c.block.toLocaleString('en-US') + '</b> <span style="opacity:.7">indexing' +
+          (c.progress === null ? '' : ' ' + c.progress.toFixed(1) + '%') + '</span></span>');
+        continue;
+      }
       const age = c.lag + drift;
       worst = worst === null ? age : Math.max(worst, age);
       bits.push('<span class="live-item">' + esc(c.chain) + ' <b class="num">' +
@@ -666,10 +713,14 @@ function setLive(data) {
       bits.push('<span class="live-item">ref <b>' + esc(data.reference.source) + '</b></span>');
     }
     // Green while every source is near its head; amber once the worst drifts.
-    const cls = worst === null ? 'dead' : worst > 300 ? 'stale' : 'pulse';
+    // A table whose only venues are still indexing is NOT an outage -- it gets
+    // its own wording so a healthy backfill never reads as a dead service.
+    const allSyncing = chains.length > 0 && chains.every((c) => c.syncing);
+    const cls = allSyncing ? 'stale' : worst === null ? 'dead' : worst > 300 ? 'stale' : 'pulse';
+    const label = allSyncing ? 'indexing' : worst === null ? 'no data' : 'live';
     el('live').innerHTML =
       '<span class="live-item"><span class="dot ' + cls + '"></span>' +
-      (worst === null ? 'no data' : 'live') + '</span>' + bits.join('');
+      label + '</span>' + bits.join('');
   };
   tick();
   liveTimer = setInterval(tick, 1000);
@@ -809,6 +860,57 @@ function sourceBadge(source) {
     esc(source.adapter + ' — ' + source.endpointId) + '">' + esc(product) + '</span>';
 }
 
+/**
+ * Is this venue still indexing?
+ *
+ * A THIRD state, deliberately not folded into "flagged". Flagged means we have
+ * a number and do not trust it. Syncing means we have no number yet, and the
+ * pools are fine -- our index just has not reached them. Showing the Base row
+ * as FLAGGED would accuse a healthy market of being broken.
+ */
+function isSyncing(p) {
+  return Boolean(p.source && p.source.syncing) ||
+    (p.quality.caveats || []).indexOf('subgraph-syncing') !== -1;
+}
+
+/** "1 venue" / "2 venues" -- the count is user-facing text, not a debug line. */
+function plural(n, one, many) {
+  return n + ' ' + (n === 1 ? one : (many || one + 's'));
+}
+
+function intfmt(n) {
+  return (n === null || n === undefined) ? '—' : Number(n).toLocaleString('en-US');
+}
+
+/**
+ * Sync progress, shown as a real measurement.
+ *
+ * The block numbers and the percentage come from the indexer's own status
+ * endpoint, so a reader can re-check them independently. Without figures this
+ * would be indistinguishable from a dead subgraph -- "no data" is what both
+ * look like.
+ */
+function syncPanel(p) {
+  const src = p.source || {};
+  const pctDone = typeof src.syncProgressPct === 'number' ? src.syncProgressPct : null;
+  const bar = pctDone === null ? '' :
+    '<div class="syncbar" title="' + esc(pctDone.toFixed(2) + '% of the configured block range indexed') + '">' +
+      '<div class="syncbar-fill" style="width:' + Math.max(1.5, Math.min(100, pctDone)).toFixed(2) + '%"></div>' +
+    '</div>';
+
+  const detail = (src.indexedBlock || src.chainHeadBlock)
+    ? 'block <b>' + intfmt(src.indexedBlock) + '</b> of <b>' + intfmt(src.chainHeadBlock) + '</b>' +
+      (pctDone === null ? '' : ' · <b>' + pctDone.toFixed(1) + '%</b>') +
+      (src.blocksRemaining !== null && src.blocksRemaining !== undefined
+        ? '<br>' + intfmt(src.blocksRemaining) + ' blocks to go' : '')
+    : 'progress unavailable — the indexer status endpoint did not answer';
+
+  const pub = src.selfPublished
+    ? '<div class="sync-pub">' + ICON.sync + 'subgraph published by us</div>' : '';
+
+  return bar + '<div class="sync-note">' + detail + '</div>' + pub;
+}
+
 /** Chain + DEX, the two facts that say WHERE a price came from. */
 function venueLine(p) {
   const proto = p.source.protocol || '';
@@ -827,11 +929,20 @@ function outcome(data) {
   const pts = data.points || [];
   if (!pts.length) return '';
   const ok = pts.filter((p) => p.quality.priceReliable && p.priceUsd !== null);
-  const flagged = pts.filter((p) => !p.quality.priceReliable);
+  // Syncing venues are excluded from BOTH reliable and flagged. They are not a
+  // bad price; they are not yet a price at all.
+  const syncing = pts.filter(isSyncing);
+  const flagged = pts.filter((p) => !p.quality.priceReliable && !isSyncing(p));
 
   const chains = [...new Set(pts.map((p) => p.chain))];
   const dexes = [...new Set(pts.map((p) => p.source.protocol).filter(Boolean))];
-  const products = [...new Set(pts.map((p) => p.source.product).filter(Boolean))];
+  // Dedupe on the base product name: "Subgraph" and "Subgraph (self-published)"
+  // are the same Graph product, so listing both reads as a stutter. The
+  // self-published fact is worth stating once, not twice.
+  const selfPub = pts.some((p) => p.source.selfPublished);
+  const products = [...new Set(
+    pts.map((p) => (p.source.product || '').replace(/\s*\(self-published\)/, '')).filter(Boolean)
+  )];
 
   let spreadHtml = '<span class="out-dim">not comparable — fewer than two reliable venues</span>';
   if (ok.length >= 2) {
@@ -848,21 +959,38 @@ function outcome(data) {
     ? flagged.map((f) => esc(f.symbol) + ' <span class="out-dim">(' + esc(f.chain) + ')</span>').join(', ')
     : '<span class="out-dim">none</span>';
 
+  // Only rendered when something IS indexing, so a fully-synced table is not
+  // cluttered by a permanent empty row.
+  const syncHtml = syncing.length
+    ? '<div class="out-row"><span class="out-key">Indexing</span><span>' +
+        syncing.map((f) => {
+          const p2 = typeof f.source.syncProgressPct === 'number'
+            ? ' <span class="out-dim">' + f.source.syncProgressPct.toFixed(1) + '%</span>' : '';
+          return esc(f.symbol) + ' <span class="out-dim">(' + esc(f.chain) + ')</span>' + p2;
+        }).join(', ') +
+        ' <span class="out-dim">— no price yet, not counted above</span></span></div>'
+    : '';
+
   return '<div class="outcome">' +
     '<div class="out-row"><span class="out-key">Coverage</span>' +
-      '<span><b>' + pts.length + '</b> venues · <b>' + chains.length + '</b> chains (' + chains.map(esc).join(', ') + ')' +
-      ' · <b>' + dexes.length + '</b> DEXes (' + dexes.map(esc).join(', ') + ')' +
-      ' · via ' + products.map(esc).join(' + ') + '</span></div>' +
+      '<span><b>' + pts.length + '</b> ' + (pts.length === 1 ? 'venue' : 'venues') +
+      (syncing.length ? ' <span class="out-dim">(' + (pts.length - syncing.length) + ' pricing, ' + syncing.length + ' indexing)</span>' : '') +
+      ' · <b>' + chains.length + '</b> ' + (chains.length === 1 ? 'chain' : 'chains') + ' (' + chains.map(esc).join(', ') + ')' +
+      ' · <b>' + dexes.length + '</b> ' + (dexes.length === 1 ? 'DEX' : 'DEXes') + ' (' + dexes.map(esc).join(', ') + ')' +
+      ' · via ' + products.map(esc).join(' + ') +
+      (selfPub ? ' <span class="out-dim">(1 subgraph published by us)</span>' : '') + '</span></div>' +
     '<div class="out-row"><span class="out-key">Reliable</span>' +
       '<span><b>' + ok.length + ' of ' + pts.length + '</b> · ' + spreadHtml + '</span></div>' +
     '<div class="out-row"><span class="out-key">Flagged</span><span>' + flagHtml + '</span></div>' +
+    syncHtml +
   '</div>';
 }
 
 /** A single issuer card -- the three-second hero. */
 function card(p) {
   const q = p.quality;
-  const flagged = !q.priceReliable;
+  const syncing = isSyncing(p);
+  const flagged = !q.priceReliable && !syncing;
   const price = usd(p.priceUsd);
   const dev = pct(p.deviationPct);
 
@@ -876,15 +1004,19 @@ function card(p) {
     devHtml = '<div class="dev ' + cls + '">' + icon + '<span class="num">' + dev + '</span></div>';
   }
 
-  const note = flagged
-    ? 'Not a reliable price'
-    : (q.deviationReliable ? 'vs reference, live' : 'vs last close');
+  const note = syncing
+    ? 'No price yet — our index has not reached these pools'
+    : flagged
+      ? 'Not a reliable price'
+      : (q.deviationReliable ? 'vs reference, live' : 'vs last close');
 
-  const badge = flagged
-    ? '<span class="badge flag">' + ICON.warn + 'FLAGGED</span>'
-    : '<span class="badge ok">' + ICON.ok + 'RELIABLE</span>';
+  const badge = syncing
+    ? '<span class="badge sync">' + ICON.sync + 'SYNCING</span>'
+    : flagged
+      ? '<span class="badge flag">' + ICON.warn + 'FLAGGED</span>'
+      : '<span class="badge ok">' + ICON.ok + 'RELIABLE</span>';
 
-  return '<article class="card' + (flagged ? ' flagged' : '') + '">' +
+  return '<article class="card' + (flagged ? ' flagged' : '') + (syncing ? ' syncing' : '') + '">' +
     '<div class="card-head"><div>' +
       '<div class="issuer">' + esc(p.issuer) + '</div>' +
       '<div class="symbol">' + esc(p.symbol) + '</div>' +
@@ -893,9 +1025,12 @@ function card(p) {
         esc(p.tokenAddress.slice(0, 8)) + '…' + esc(p.tokenAddress.slice(-6)) + '</div>' +
     '</div>' + badge + '</div>' +
     '<div class="price num' + (price ? '' : ' null') + '">' +
-      (price || nullCell('price unavailable — no usable on-chain price')) + '</div>' +
-    devHtml +
+      (price || nullCell(syncing
+        ? 'no price yet — the subgraph is still indexing these pools'
+        : 'price unavailable — no usable on-chain price')) + '</div>' +
+    (syncing ? '' : devHtml) +
     '<div class="dev-note">' + esc(note) + '</div>' +
+    (syncing ? syncPanel(p) : '') +
     '<div class="card-stats">' +
       '<div><span class="stat-label">Pool TVL</span><span class="stat-val num">' +
         (compactUsd(p.poolTvlUsd) || nullCell('unavailable')) + '</span></div>' +
@@ -912,7 +1047,8 @@ function flagList(caveats) {
   if (!caveats || !caveats.length) return '';
   return '<div class="flags">' + caveats.map((c) => {
     const info = caveat(c);
-    return '<span class="flag' + (info.info ? ' info' : '') + '" title="' + esc(info.why) + '">' +
+    const cls = info.sync ? ' info sync' : info.info ? ' info' : '';
+    return '<span class="flag' + cls + '" title="' + esc(info.why) + '">' +
       esc(info.label) + '</span>';
   }).join('') + '</div>';
 }
@@ -939,13 +1075,19 @@ function poolDetails(p) {
 
 function row(p) {
   const q = p.quality;
-  const flagged = !q.priceReliable;
+  const syncing = isSyncing(p);
+  const flagged = !q.priceReliable && !syncing;
   const dev = pct(p.deviationPct);
   const devCls = dev === null ? '' : flagged ? 'untrusted' : (p.deviationPct >= 0 ? 'up' : 'down');
 
-  const status = flagged
-    ? '<span class="badge flag">' + ICON.warn + 'FLAGGED</span>'
-    : '<span class="badge ok">' + ICON.ok + 'RELIABLE</span>';
+  const status = syncing
+    ? '<span class="badge sync" title="' +
+        esc('Indexed to block ' + intfmt(p.source.indexedBlock) + ' of ' + intfmt(p.source.chainHeadBlock) +
+            (typeof p.source.syncProgressPct === 'number' ? ' (' + p.source.syncProgressPct.toFixed(1) + '%)' : '')) +
+        '">' + ICON.sync + 'SYNCING</span>'
+    : flagged
+      ? '<span class="badge flag">' + ICON.warn + 'FLAGGED</span>'
+      : '<span class="badge ok">' + ICON.ok + 'RELIABLE</span>';
 
   return '<tr' + (flagged ? ' class="flagged"' : '') + '>' +
     '<td><div class="sym">' + esc(p.symbol) + '</div><div class="iss">' + esc(p.issuer) + '</div></td>' +
@@ -953,12 +1095,15 @@ function row(p) {
       (p.caip2 ? '<div class="iss" style="opacity:.6">' + esc(p.caip2) + '</div>' : '') + '</td>' +
     '<td><span class="iss">' + esc(p.source.protocol || '—') + '</span></td>' +
     '<td>' + sourceBadge(p.source) + '</td>' +
-    '<td class="r num">' + (usd(p.priceUsd) || nullCell('no usable on-chain price')) + '</td>' +
+    '<td class="r num">' + (usd(p.priceUsd) || nullCell(syncing
+      ? 'no price yet — subgraph still indexing'
+      : 'no usable on-chain price')) + '</td>' +
     '<td class="r num">' + (usd(p.referencePriceUsd) || nullCell('no reference price available')) + '</td>' +
     '<td class="r num ' + devCls + '" style="font-weight:600">' +
       (dev === null ? nullCell('deviation needs both prices') : esc(dev)) + '</td>' +
     '<td class="r num">' + (compactUsd(p.poolTvlUsd) ||
-      nullCell(p.poolTvlUsd === null ? 'not observable from an event stream' : 'unavailable')) + '</td>' +
+      nullCell(syncing ? 'not indexed yet'
+        : p.poolTvlUsd === null ? 'not observable from an event stream' : 'unavailable')) + '</td>' +
     '<td class="r num">' + (compactUsd(volumeValue(p)) || nullCell('volume unavailable')) +
       (p.volume24hUsd === null && p.volumeWindowHours ?
         '<div class="iss">over ' + fmtHours(p.volumeWindowHours) + '</div>' : '') + '</td>' +

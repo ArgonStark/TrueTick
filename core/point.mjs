@@ -19,6 +19,7 @@ import * as ethereumUniV4 from './adapters/ethereum-univ4.mjs'
 import * as robinhoodRpc from './adapters/robinhood-rpc.mjs'
 import * as robinhoodSubstreams from './adapters/robinhood-substreams.mjs'
 import * as solanaSubstreams from './adapters/solana-substreams.mjs'
+import * as baseAerodrome from './adapters/base-aerodrome.mjs'
 import { getReferencePriceCached } from './reference-price.mjs'
 
 /**
@@ -35,6 +36,7 @@ const ADAPTERS = {
   [robinhoodRpc.ADAPTER_ID]: robinhoodRpc,
   [robinhoodSubstreams.ADAPTER_ID]: robinhoodSubstreams,
   [solanaSubstreams.ADAPTER_ID]: solanaSubstreams,
+  [baseAerodrome.ADAPTER_ID]: baseAerodrome,
 }
 
 /**
@@ -112,6 +114,7 @@ function judge({
   source,
   decimalsMatch,
   sourceError,
+  syncing = false,
   extraCaveats = [],
 }) {
   /** @type {string[]} */
@@ -121,7 +124,14 @@ function judge({
   // a fact about the market; the other is a fact about our plumbing, and
   // dressing the second up as the first is exactly the silent lie this project
   // keeps designing against.
-  if (sourceError) caveats.push('source-error')
+  // THREE distinct states, never collapsed into each other:
+  //   syncing      -- our index has not reached these pools yet
+  //   source-error -- we tried to read and failed
+  //   no-pools     -- we read successfully and the market is genuinely empty
+  // Only the third is a statement about the market. Rendering a syncing venue
+  // as 'no-pools' would report our own backfill as an absence of liquidity.
+  if (syncing) caveats.push('subgraph-syncing')
+  else if (sourceError) caveats.push('source-error')
   else if (poolCount === 0) caveats.push('no-pools')
 
   // Phantom liquidity: capital sitting in pools that nobody trades against.
@@ -147,7 +157,11 @@ function judge({
   }
 
   if (source.hasIndexingErrors) caveats.push('indexing-errors')
-  if (source.indexedLagSeconds > THRESHOLDS.indexLagSeconds) caveats.push('index-lagging')
+  // 'index-lagging' is suppressed while syncing: 'subgraph-syncing' already
+  // says it, and more precisely (with a block count and a percentage).
+  if (!syncing && source.indexedLagSeconds > THRESHOLDS.indexLagSeconds) {
+    caveats.push('index-lagging')
+  }
 
   // A registry entry whose decimals disagree with the chain is a registry bug,
   // and registry bugs are the ones that produce confidently wrong answers.
@@ -221,6 +235,7 @@ export function buildPoint({ address, entry, shaped, source, reference, referenc
     source,
     decimalsMatch,
     sourceError: shaped.sourceError ?? null,
+    syncing: shaped.syncing ?? false,
     extraCaveats: shaped.extraCaveats ?? [],
   })
 
@@ -359,7 +374,10 @@ export async function buildComparison(ticker, entries) {
     .filter(Boolean)
 
   // Deepest market first: that is the price a reader should weigh most.
-  points.sort((a, b) => b.poolTvlUsd - a.poolTvlUsd)
+  // Unknown TVL (null -- a syncing or event-only venue) sorts last rather than
+  // being coerced to 0, so it never ties with a genuinely empty pool.
+  const tvlRank = (p) => (p.poolTvlUsd === null || p.poolTvlUsd === undefined ? -1 : p.poolTvlUsd)
+  points.sort((a, b) => tvlRank(b) - tvlRank(a))
 
   return {
     ticker,

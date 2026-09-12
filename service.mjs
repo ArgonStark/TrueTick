@@ -20,6 +20,7 @@ import { buildComparison, buildPoint, THRESHOLDS } from './core/point.mjs'
 import { fetchOnChain, shapeToken, ADAPTER_ID, SUBGRAPH_ID } from './core/adapters/ethereum-univ4.mjs'
 import * as robinhoodSubstreams from './core/adapters/robinhood-substreams.mjs'
 import * as solanaSubstreams from './core/adapters/solana-substreams.mjs'
+import * as baseAerodrome from './core/adapters/base-aerodrome.mjs'
 import { getReferencePriceCached } from './core/reference-price.mjs'
 
 try {
@@ -67,9 +68,25 @@ app.get('/health', (_req, res) => {
  * Graph Market) feeding one normalized schema across three chains and three DEX
  * protocols. `GET /price/:ticker` is a single query pattern over all of it.
  */
-app.get('/sources', (_req, res) => {
+app.get('/sources', async (_req, res) => {
   const tokens = Object.values(TOKENS)
   const count = (adapter) => tokens.filter((t) => t.adapter === adapter).length
+
+  // Live sync progress for our own subgraph, read from the indexer's public
+  // status endpoint. Fetched per request rather than asserted, so "still
+  // indexing" is a measurement a reader can re-check, not a claim in a README.
+  let baseSync = null
+  try {
+    baseSync = await baseAerodrome.fetchSyncStatus()
+  } catch {
+    /* status endpoint down: reported as unknown below, never as synced */
+  }
+  const basePct =
+    baseSync && baseSync.latestBlock !== null && baseSync.chainHeadBlock !== null
+      ? ((baseSync.latestBlock - baseAerodrome.START_BLOCK) /
+          (baseSync.chainHeadBlock - baseAerodrome.START_BLOCK)) *
+        100
+      : null
 
   res.json({
     schema: 'TokenizedStockPoint (core/types.ts) — one shape for every source',
@@ -87,7 +104,46 @@ app.get('/sources', (_req, res) => {
             caip2: 'eip155:1',
             protocol: 'Uniswap v4',
             endpoint: SUBGRAPH_ID,
+            selfPublished: false,
+            note: "Uniswap's official subgraph — consumed, not published by us.",
             tokens: count(ADAPTER_ID),
+          },
+          {
+            adapter: baseAerodrome.ADAPTER_ID,
+            chain: 'base',
+            caip2: 'eip155:8453',
+            protocol: 'Aerodrome Slipstream',
+            endpoint: baseAerodrome.SUBGRAPH_ID,
+            // The publisher story, machine-readable.
+            selfPublished: true,
+            published: {
+              slug: 'truetick-aerodrome-base',
+              subgraphId: baseAerodrome.SUBGRAPH_ID,
+              deployment: baseAerodrome.DEPLOYMENT_ID,
+              forkedFrom: 'Uniswap/v3-subgraph @ b4a0e8d34b8238482cadd3929ae88d3426a7067b',
+              indexes: `Aerodrome Slipstream CLFactory ${baseAerodrome.FACTORY}`,
+              startBlock: baseAerodrome.START_BLOCK,
+              reason:
+                'No published subgraph indexed this factory, where Coinbase B20 tokenized ' +
+                'equities actually trade. Forked, repointed, two silent-$0 bugs fixed, published.',
+            },
+            status: {
+              state: baseSync?.synced ? 'synced' : 'indexing',
+              health: baseSync?.health ?? 'unknown',
+              indexedBlock: baseSync?.latestBlock ?? null,
+              chainHeadBlock: baseSync?.chainHeadBlock ?? null,
+              blocksRemaining:
+                baseSync?.latestBlock != null && baseSync?.chainHeadBlock != null
+                  ? baseSync.chainHeadBlock - baseSync.latestBlock
+                  : null,
+              progressPct: basePct === null ? null : Number(basePct.toFixed(2)),
+              // Said plainly, because this is the field most likely to be
+              // misread as "this venue has no liquidity".
+              meaning:
+                'Backfilling. These tokens price as null with a subgraph-syncing caveat ' +
+                'until the index reaches their pools — never as 0, and never omitted.',
+            },
+            tokens: count(baseAerodrome.ADAPTER_ID),
           },
         ],
       },
@@ -123,9 +179,10 @@ app.get('/sources', (_req, res) => {
       },
     ],
     leverage: {
-      chains: 3,
-      dexProtocols: ['Uniswap v4', 'Uniswap V3', 'Raydium CLMM'],
+      chains: 4,
+      dexProtocols: ['Uniswap v4', 'Uniswap V3', 'Raydium CLMM', 'Aerodrome Slipstream'],
       graphProducts: 2,
+      subgraphsPublishedByUs: 1,
       schemaChangesToAddSolana: 0,
       note:
         'Adding a non-EVM chain required a new adapter file and registry rows. ' +

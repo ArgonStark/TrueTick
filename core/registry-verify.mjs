@@ -39,11 +39,21 @@ const RPCS_BY_CHAIN = {
     process.env.ROBINHOOD_RPC_URL || 'https://robinhood.rpc.service.pinax.network',
     'https://rpc.mainnet.chain.robinhood.com',
   ],
+  8453: [
+    process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+    'https://base-rpc.publicnode.com',
+    'https://1rpc.io/base',
+  ],
 }
+
+/** Aerodrome Slipstream CL factory our Base subgraph indexes. */
+const BASE_CL_FACTORY = '0xf8f2eb4940cfe7d13603dddd87f123820fc061ef'
+/** keccak256('factory()')[0:4] */
+const SEL_FACTORY = '0xc45a0155'
 
 const SEL = { symbol: '0x95d89b41', decimals: '0x313ce567', name: '0x06fdde03' }
 
-async function rpc(url, method, params) {
+async function rpcOnce(url, method, params) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -59,6 +69,45 @@ async function rpc(url, method, params) {
   }
   if (j.error) throw new Error(j.error.message)
   return j.result
+}
+
+/**
+ * Retry rate-limited reads instead of reporting them as verification failures.
+ *
+ * This matters more than it looks. Without it a public endpoint's throttling
+ * prints "FAIL NVDAc" next to a token that is perfectly valid -- a false alarm
+ * about the REGISTRY, which is the one file where a wrong entry silently
+ * compares against the wrong stock. A verifier that cries wolf gets ignored,
+ * and then a real mismatch gets ignored with it.
+ */
+/** Sibling endpoints for the same chain, so a retry can switch provider. */
+function siblingsOf(url) {
+  for (const list of Object.values(RPCS_BY_CHAIN)) {
+    if (list.includes(url)) return list
+  }
+  return [url]
+}
+
+async function rpc(url, method, params) {
+  // Retrying the SAME throttled endpoint mostly just waits out its window.
+  // Rotating to a sibling on the same chain answers immediately, and the
+  // control call in pickRpc already established that these endpoints agree.
+  const ring = siblingsOf(url)
+  const start = ring.indexOf(url)
+  let last
+  for (let attempt = 0; attempt < ring.length * 2; attempt++) {
+    const candidate = ring[(start + attempt) % ring.length]
+    try {
+      return await rpcOnce(candidate, method, params)
+    } catch (e) {
+      last = e
+      const msg = String(e.message || e)
+      const retryable = /rate limit|429|too many|timeout|fetch failed|ECONNRESET|empty/i.test(msg)
+      if (!retryable) throw e
+      await new Promise((r) => setTimeout(r, 350 * (attempt + 1)))
+    }
+  }
+  throw last
 }
 
 /** Decode an ABI-encoded string return value. */
@@ -201,6 +250,10 @@ for (const address of addresses) {
       rpc(RPC, 'eth_getCode', [address, 'latest']),
     ])
 
+    // Coinbase's B20 tokens on Base return the single byte 0xef rather than
+    // ordinary bytecode, yet answer every ERC-20 call correctly. So the test is
+    // "did the node return nothing at all", not "does this look like bytecode"
+    // -- the stricter version would reject seven demonstrably valid tokens.
     if (!code || code === '0x') problems.push('NO CONTRACT CODE at this address')
     const symbol = decodeString(symHex)
     const name = decodeString(nameHex)
@@ -209,6 +262,25 @@ for (const address of addresses) {
     if (symbol !== e.symbol) problems.push(`symbol on-chain "${symbol}" != registry "${e.symbol}"`)
     if (name !== e.name) problems.push(`name on-chain "${name}" != registry "${e.name}"`)
     if (decimals !== e.decimals) problems.push(`decimals on-chain ${decimals} != registry ${e.decimals}`)
+
+    // Pool addresses in the registry are load-bearing (the subgraph indexes the
+    // factory, and these are the pools we claim it will serve), so they get the
+    // same two-source treatment as the tokens: each pool must exist AND report
+    // the target factory from factory(). A pool on the OTHER Aerodrome factory
+    // would look plausible and never be indexed by our subgraph.
+    if (e.chain === 'base' && Array.isArray(e.pools)) {
+      for (const pool of e.pools) {
+        try {
+          const f = await rpc(RPC, 'eth_call', [{ to: pool.pool, data: SEL_FACTORY }, 'latest'])
+          const got = '0x' + String(f || '').slice(-40).toLowerCase()
+          if (got !== BASE_CL_FACTORY) {
+            problems.push(`pool ${pool.pool.slice(0, 10)} factory ${got.slice(0, 10)} is not the CL factory we index`)
+          }
+        } catch (err) {
+          problems.push(`pool ${pool.pool.slice(0, 10)} unreadable: ${String(err.message).slice(0, 40)}`)
+        }
+      }
+    }
 
     const sg = indexed[address]
     if (sg) {
