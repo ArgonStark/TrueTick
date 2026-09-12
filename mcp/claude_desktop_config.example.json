@@ -1,0 +1,17 @@
+{
+  "_comment_1": "MERGE the mcpServers key below into ~/Library/Application Support/Claude/claude_desktop_config.json — do NOT replace that file, it already contains coworkUserFilesPath and preferences.",
+  "_comment_2": "command MUST be the absolute path to node. Claude Desktop launches from Finder without your shell profile, so nvm's node is not on its PATH and a bare 'node' fails silently.",
+  "_comment_3": "No secret belongs in this file. OPERATOR_PRIVATE_KEY is deliberately absent — the server loads the gitignored project env file by absolute path. HEDERA_ACCOUNT_ID is a public account id, included only to skip a rate-limited mirror node lookup.",
+
+  "mcpServers": {
+    "truetick": {
+      "command": "/Users/argon/.nvm/versions/node/v24.11.1/bin/node",
+      "args": ["/Users/argon/Projects/TrueTick/mcp/truetick-mcp.mjs"],
+      "env": {
+        "TRUETICK_PAID_URL": "http://localhost:4402",
+        "TRUETICK_FREE_URL": "http://localhost:8402",
+        "HEDERA_ACCOUNT_ID": "0.0.10435533"
+      }
+    }
+  }
+}
